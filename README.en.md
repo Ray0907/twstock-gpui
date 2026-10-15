@@ -4,6 +4,10 @@
 
 A desktop watch app for Taiwan stocks, for personal use. Native macOS, built with the GPUI components of [gpui-kit](https://github.com/longbridge/gpui-kit). Not a web app.
 
+![Dark theme](tests/snapshots/dark.png)
+
+Screenshots use invented sample data (fictional instruments with codes starting 99), not real quotes.
+
 ## Features
 
 - **Three-column workspace:** watchlist (with sparklines), chart, and quote detail (order book, buy/sell ratio, volume and position). Panels can be dragged and resized.
@@ -17,6 +21,14 @@ A desktop watch app for Taiwan stocks, for personal use. Native macOS, built wit
 - **⌘K search:** add an instrument by code prefix or name substring. Up/Down to select, Enter to add, Esc to close. Already-added and over-the-subscription-limit cases are reported explicitly.
 - **Dark and light** themes.
 - **Connection state** is always visible: connecting, ok, stale, failed, market closed. A dropped connection is never shown as flat.
+
+![Light theme](tests/snapshots/light.png)
+
+![Crosshair](tests/snapshots/crosshair.png)
+
+![Weekly chart](tests/snapshots/weekly.png)
+
+![Monthly chart](tests/snapshots/monthly.png)
 
 ## Data sources
 

@@ -4,6 +4,10 @@
 
 台股看盤桌面程式，自用。原生 macOS，用 [gpui-kit](https://github.com/longbridge/gpui-kit) 的 GPUI 元件寫成，不是網頁。
 
+![深色主題](tests/snapshots/dark.png)
+
+畫面為編造的範例資料（代號 99 開頭的虛構商品），不是真實行情。
+
 ## 功能
 
 - 實際張數四捨五入至整張並加千分位；量軸刻度保留 k/M 縮寫。游標選取日期時，量副圖右軸標出該柱實際量（截斷柱仍顯示真實量），無游標則淡色顯示最新量；日期／價格／量標籤會避讓軸刻度。
@@ -18,6 +22,14 @@
 - ⌘K 搜尋商品，依代號前綴或名稱子字串加入自選；上下鍵選取、Enter 加入、Esc 關閉。已加入與超過訂閱上限會明確提示。
 - 深色與淺色主題。
 - 連線狀態一直看得到：連線中、正常、過期、失敗、休市。斷線不會被顯示成平盤。
+
+![淺色主題](tests/snapshots/light.png)
+
+![十字游標](tests/snapshots/crosshair.png)
+
+![週線](tests/snapshots/weekly.png)
+
+![月線](tests/snapshots/monthly.png)
 
 ## 資料來源
 
