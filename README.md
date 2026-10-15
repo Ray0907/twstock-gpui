@@ -1,5 +1,7 @@
 # twstock-gpui
 
+繁體中文 · [English](README.en.md)
+
 台股看盤桌面程式，自用。原生 macOS，用 [gpui-kit](https://github.com/longbridge/gpui-kit) 的 GPUI 元件寫成，不是網頁。
 
 ## 功能
