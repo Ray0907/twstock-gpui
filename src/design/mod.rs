@@ -1,6 +1,7 @@
 pub mod chart;
 pub mod color;
 pub mod direction;
+pub mod palette;
 pub mod parts;
 pub mod shape;
 pub mod space;

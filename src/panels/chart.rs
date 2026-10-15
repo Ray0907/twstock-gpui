@@ -10,6 +10,7 @@ pub struct ChartPanel {
     table: Entity<TableState<WatchlistDelegate>>,
     focus: FocusHandle,
     _selection: Subscription,
+    period: usize,
 }
 impl ChartPanel {
     pub fn new(
@@ -22,6 +23,7 @@ impl ChartPanel {
             table,
             focus: cx.focus_handle(),
             _selection: selection,
+            period: 0,
         }
     }
 }
@@ -59,14 +61,29 @@ impl Render for ChartPanel {
         parts::pane("chart-panel")
             .track_focus(&self.focus)
             .child(parts::chart_header(&quote, cx))
-            .child(parts::periods(cx))
+            .child(parts::periods(
+                self.period,
+                cx.listener(|this, index, _, cx| {
+                    this.period = *index;
+                    cx.notify();
+                }),
+                cx,
+            ))
             .child(
                 if let Some((series, current)) = table
                     .delegate()
                     .chart_series(table.selected_row().unwrap_or(0), cx)
                     .filter(|(s, _)| !s.candles.is_empty())
                 {
-                    chart::view(series, current, cx)
+                    let period = [
+                        crate::market::Timeframe::Day,
+                        crate::market::Timeframe::Week,
+                        crate::market::Timeframe::Month,
+                    ][self.period];
+                    match series.for_period(period) {
+                        Ok(series) => chart::view(series, current, period, cx),
+                        Err(error) => parts::panel_header(error, cx),
+                    }
                 } else {
                     parts::panel_header(
                         quote

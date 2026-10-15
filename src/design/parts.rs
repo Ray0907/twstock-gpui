@@ -7,7 +7,7 @@ use super::{
 use crate::quotes::{Quote, format_price};
 use gpui_kit::base::ObservedElement;
 use gpui_kit::component::{
-    ActiveTheme, IconName, Selectable, Sizable, Size, TitleBar,
+    ActiveTheme, IconName, Sizable, Size, TitleBar,
     button::{Button, ButtonVariants},
     chart::LineChart,
     dock::{BasePanelView, DockArea, DockLayout, DockSkin},
@@ -92,6 +92,29 @@ pub fn quote_summary(quote: &Quote, share: f32, cx: &App) -> Div {
         .child(quote_metrics(quote, cx))
         .child(depth_ratio(share, cx))
         .child(depth_book(quote, cx))
+}
+pub type RemoveHandler = std::rc::Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
+pub fn watch_heading(handler: RemoveHandler, cx: &App) -> Div {
+    use gpui_kit::component::{
+        button::Button,
+        menu::{DropdownMenu, PopupMenuItem},
+    };
+    h_flex()
+        .gap(Space::Small.rem())
+        .items_center()
+        .child(panel_header("自選", cx))
+        .child(
+            Button::new("watchlist-actions")
+                .label("…")
+                .small()
+                .dropdown_menu(move |menu, _, _| {
+                    let handler = handler.clone();
+                    menu.item(
+                        PopupMenuItem::new("移除選取（Delete / Backspace）")
+                            .on_click(move |e, w, cx| handler(e, w, cx)),
+                    )
+                }),
+        )
 }
 pub fn watch_columns(cx: &App) -> Vec<Column> {
     let widths = space::watch_widths(Dimension::Watchlist.rem().to_pixels(cx.theme().font_size));
@@ -354,16 +377,28 @@ pub fn ohlc_row(quote: &Quote, cx: &App) -> ObservedElement<Stateful<Div>> {
             }),
         )
 }
-pub fn periods(cx: &App) -> TabBar {
+pub fn periods(
+    selected: usize,
+    on_click: impl Fn(&usize, &mut Window, &mut App) + 'static,
+    cx: &App,
+) -> TabBar {
     TabBar::new("chart-periods")
-        .child(
-            Tab::new()
-                .child(panel_header("日", cx).text_color(color::get(ColorRole::Focus, cx)))
-                .selected(true),
-        )
+        .selected_index(selected)
+        .on_click(on_click)
         .children(
-            ["週", "月", "5分", "15分"]
-                .map(|label| Tab::new().child(panel_header(label, cx)).disabled(true)),
+            ["日", "週", "月"]
+                .into_iter()
+                .enumerate()
+                .map(|(i, label)| {
+                    Tab::new().child(
+                        panel_header(label, cx)
+                            .when(i == selected, |this| {
+                                this.text_color(color::get(ColorRole::Focus, cx))
+                            })
+                            .id(["period-day", "period-week", "period-month"][i])
+                            .test_support(),
+                    )
+                }),
         )
 }
 pub fn quote_header(quote: &Quote, cx: &App) -> Div {

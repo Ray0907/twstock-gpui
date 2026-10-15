@@ -112,6 +112,13 @@ impl MarketStore {
             snapshots: HashMap::new(),
         }
     }
+    pub fn remove_instrument(&mut self, symbol: &Symbol) {
+        self.order.retain(|s| s != symbol);
+        self.instruments.remove(symbol);
+        self.snapshots.remove(symbol);
+        self.histories.remove(symbol);
+        self.history_errors.remove(symbol);
+    }
     pub fn add_instrument(&mut self, instrument: Instrument) {
         let symbol = instrument.symbol.clone();
         if !self.instruments.contains_key(&symbol) {
@@ -197,9 +204,22 @@ impl MarketStore {
                     }
                 }
                 if !self.instruments.contains_key(&update.symbol) {
-                    self.add_instrument(Instrument::new(update.symbol.clone()));
+                    self.add_instrument(
+                        update
+                            .instrument
+                            .clone()
+                            .map(|i| *i)
+                            .unwrap_or_else(|| Instrument::new(update.symbol.clone())),
+                    );
                 }
-                if let Some(instrument) = update.instrument.clone() {
+                if let Some(mut instrument) = update.instrument.clone() {
+                    if let Some(known) = self.instruments.get(&update.symbol) {
+                        instrument.tick_rule = known.tick_rule;
+                        instrument.lot_size = known.lot_size;
+                        if known.name != known.symbol.code {
+                            instrument.name = known.name.clone();
+                        }
+                    }
                     self.add_instrument(*instrument);
                 }
                 let old = self.snapshots.get(&update.symbol).unwrap();
@@ -292,6 +312,9 @@ impl MarketStore {
                 format!("過期 · 最後更新 {} 秒前", now.saturating_sub(*since))
             }
             LinkState::Live => {
+                if self.order.is_empty() {
+                    return "自選清單為空".into();
+                }
                 let session = if self.snapshots.values().all(|q| {
                     matches!(
                         q.session,

@@ -38,9 +38,17 @@ fn load() -> MarketStore {
         instruments.len() <= Capabilities::mis().max_subscriptions,
         "watchlist exceeds MIS subscription capacity"
     );
+    let directory = IsinDirectory::new()
+        .and_then(|mut source| source.instruments())
+        .expect("live directory metadata required");
     let mut store = MarketStore::new(Capabilities::mis());
     for instrument in instruments {
-        store.add_instrument(instrument);
+        let canonical = directory
+            .iter()
+            .find(|i| i.symbol == instrument.symbol)
+            .expect("configured symbol must be in supported directory")
+            .clone();
+        store.add_instrument(canonical);
     }
     assert!(
         !ready(&store),
@@ -99,6 +107,20 @@ fn load() -> MarketStore {
         "live data exceeded the 20-second deadline"
     );
     store.tick(now());
+    for (index, symbol) in store.order.iter().enumerate() {
+        let day = store.chart_series(symbol).expect("loaded daily series");
+        eprintln!(
+            "live periods #{}: daily {}; weekly {}; monthly {}",
+            index + 1,
+            day.candles.len(),
+            day.clone()
+                .for_period(Timeframe::Week)
+                .unwrap()
+                .candles
+                .len(),
+            day.for_period(Timeframe::Month).unwrap().candles.len()
+        );
+    }
     eprintln!(
         "live shot: {} instruments ready in {:.1}s; {}; data {:?}",
         store.instruments.len(),

@@ -17,6 +17,13 @@ fn color_bytes(color: Hsla) -> [u8; 4] {
     [color.r, color.g, color.b, color.a].map(|v| (v * 255.).round() as u8)
 }
 
+struct FixtureDirectory(Result<Vec<twstock_gpui::market::Instrument>, String>);
+impl twstock_gpui::market::Directory for FixtureDirectory {
+    fn instruments(&mut self) -> Result<Vec<twstock_gpui::market::Instrument>, String> {
+        self.0.clone()
+    }
+}
+
 struct FontWeights;
 impl Render for FontWeights {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -761,7 +768,387 @@ fn reference_price_rendering(mode: ThemeMode) {
         })
         .unwrap();
 }
+fn period_rendering() {
+    let mut cx = HeadlessAppContext::with_platform(
+        gpui_kit::platform::current_platform(true).text_system(),
+        Arc::new(Assets),
+        gpui_kit::platform::current_headless_renderer,
+    );
+    cx.update(gpui_kit::init);
+    let (handle, _) = cx
+        .update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        Default::default(),
+                        size(px(1080.), px(720.)),
+                    ))),
+                    focus: false,
+                    show: false,
+                    ..TitleBar::window_options()
+                },
+                cx,
+                |w, cx| {
+                    twstock_gpui::theme::apply(ThemeMode::Dark, Some(w), cx);
+                    cx.new(|cx| Workspace::new(w, cx))
+                },
+            )
+        })
+        .unwrap();
+    for (id, path) in [
+        ("period-week", "/tmp/twstock-gpui-weekly.png"),
+        ("period-month", "/tmp/twstock-gpui-monthly.png"),
+    ] {
+        for _ in 0..3 {
+            cx.update_window(handle, |_, w, cx| w.render_frame(cx))
+                .unwrap();
+            cx.run_until_parked();
+        }
+        cx.update_window(handle, |_, w, cx| w.click(id, cx))
+            .unwrap();
+        for _ in 0..3 {
+            cx.update_window(handle, |_, w, cx| w.render_frame(cx))
+                .unwrap();
+            cx.run_until_parked();
+        }
+        cx.update_window(handle, |_, w, cx| {
+            let prefix = if id == "period-week" {
+                "週線"
+            } else {
+                "月線"
+            };
+            assert!(w.find("candle-region").label().unwrap().starts_with(prefix));
+            w.click(("row", 1usize), cx);
+            w.render_frame(cx);
+            assert!(
+                w.find("candle-region").label().unwrap().starts_with(prefix),
+                "stock selection must preserve the period"
+            );
+            w.click(("row", 0usize), cx);
+            w.render_frame(cx);
+        })
+        .unwrap();
+        cx.capture_screenshot(handle).unwrap().save(path).unwrap();
+    }
+}
+
+fn palette_rendering() {
+    use twstock_gpui::market::*;
+    for failed in [false, true] {
+        let mut store = MockProvider::new().store();
+        store.capabilities = Capabilities::mis();
+        let symbol = store.order[0].clone();
+        let item = store.instruments[&symbol].clone();
+        let directory = FixtureDirectory(if failed {
+            Err("編造的 Directory 網路失敗".into())
+        } else {
+            Ok(vec![item])
+        })
+        .instruments();
+        let temp = tempfile::tempdir().unwrap();
+        let mut cx = HeadlessAppContext::with_platform(
+            gpui_kit::platform::current_platform(true).text_system(),
+            Arc::new(Assets),
+            gpui_kit::platform::current_headless_renderer,
+        );
+        cx.update(gpui_kit::init);
+        let (handle, _) = cx
+            .update(|cx| {
+                gpui_kit::open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                            Default::default(),
+                            size(px(1080.), px(720.)),
+                        ))),
+                        focus: false,
+                        show: false,
+                        ..TitleBar::window_options()
+                    },
+                    cx,
+                    |w, cx| {
+                        twstock_gpui::theme::apply(ThemeMode::Dark, Some(w), cx);
+                        cx.new(|cx| {
+                            Workspace::with_services(
+                                store,
+                                directory,
+                                temp.path().join("watchlist.toml"),
+                                w,
+                                cx,
+                            )
+                        })
+                    },
+                )
+            })
+            .unwrap();
+        for _ in 0..3 {
+            cx.update_window(handle, |_, w, cx| w.render_frame(cx))
+                .unwrap();
+            cx.run_until_parked();
+        }
+        cx.update_window(handle, |_, w, cx| {
+            w.click(("row", 0usize), cx);
+            w.press("cmd-k", cx);
+        })
+        .unwrap();
+        for _ in 0..3 {
+            cx.update_window(handle, |_, w, cx| w.render_frame(cx))
+                .unwrap();
+            cx.run_until_parked();
+        }
+        cx.update_window(handle, |_, w, _| {
+            assert!(w.find("directory-palette").visible());
+            if failed {
+                assert!(w.find("palette-message").label().unwrap().contains("失敗"));
+            } else {
+                assert!(w.find("palette-watched-991901").visible());
+            }
+        })
+        .unwrap();
+        if !failed {
+            cx.capture_screenshot(handle)
+                .unwrap()
+                .save("/tmp/twstock-gpui-palette.png")
+                .unwrap();
+        }
+        cx.update_window(handle, |_, w, cx| w.press("escape", cx))
+            .unwrap();
+        for _ in 0..3 {
+            cx.update_window(handle, |_, w, cx| w.render_frame(cx))
+                .unwrap();
+            cx.run_until_parked();
+        }
+        cx.update_window(handle, |_, w, _| {
+            assert!(w.try_find("directory-palette").is_none())
+        })
+        .unwrap();
+    }
+}
+fn palette_workflow() {
+    use twstock_gpui::market::*;
+    for mock in [false, true] {
+        let mut store = MockProvider::new().store();
+        let keep = store.order[0].clone();
+        for symbol in store.order.clone().into_iter().skip(1) {
+            store.remove_instrument(&symbol);
+        }
+        if !mock {
+            let at = store.snapshot(&keep).unwrap().as_of.unwrap() + 1;
+            store.apply(
+                MarketEvent::Quote(QuoteUpdate {
+                    symbol: keep.clone(),
+                    as_of: Some(at),
+                    source: Some("Fixture".into()),
+                    ..Default::default()
+                }),
+                at,
+            );
+            store.capabilities.max_subscriptions = 2;
+        }
+        let mut a = Instrument::new(Symbol::new(Market::Otc, "889908").unwrap());
+        a.name = "編造候選甲".into();
+        let mut b = Instrument::new(Symbol::new(Market::Listed, "889909").unwrap());
+        b.name = "編造候選乙".into();
+        b.tick_rule = TickRule::Etf;
+        let directory = vec![store.instruments[&keep].clone(), a, b];
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("watchlist.toml");
+        if !mock {
+            save_watchlist(
+                &path,
+                WatchlistChange::Add(store.instruments[&keep].clone()),
+                2,
+            )
+            .unwrap();
+        }
+        let mut cx = HeadlessAppContext::with_platform(
+            gpui_kit::platform::current_platform(true).text_system(),
+            Arc::new(Assets),
+            gpui_kit::platform::current_headless_renderer,
+        );
+        cx.update(gpui_kit::init);
+        let (handle, _) = cx
+            .update(|cx| {
+                gpui_kit::open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                            Default::default(),
+                            size(px(1080.), px(720.)),
+                        ))),
+                        focus: false,
+                        show: false,
+                        ..TitleBar::window_options()
+                    },
+                    cx,
+                    |w, cx| {
+                        twstock_gpui::theme::apply(ThemeMode::Dark, Some(w), cx);
+                        cx.new(|cx| {
+                            Workspace::with_services(
+                                store,
+                                FixtureDirectory(Ok(directory)).instruments(),
+                                path.clone(),
+                                w,
+                                cx,
+                            )
+                        })
+                    },
+                )
+            })
+            .unwrap();
+        for _ in 0..3 {
+            cx.update_window(handle, |_, w, cx| w.render_frame(cx))
+                .unwrap();
+            cx.run_until_parked();
+        }
+        if mock {
+            for _ in 0..1 {
+                cx.update_window(handle, |_, w, cx| {
+                    w.click(("row", 0usize), cx);
+                    w.press("delete", cx);
+                })
+                .unwrap();
+                cx.run_until_parked();
+                cx.update_window(handle, |_, w, cx| w.render_frame(cx))
+                    .unwrap();
+                cx.run_until_parked();
+            }
+            cx.update_window(handle, |_, w, _| {
+                assert!(
+                    w.try_find(("row", 0usize)).is_none(),
+                    "Delete must remove selected rows"
+                )
+            })
+            .unwrap();
+        }
+        cx.update_window(handle, |_, w, cx| {
+            if !mock {
+                w.click(("row", 0usize), cx);
+            }
+            w.press("cmd-k", cx);
+        })
+        .unwrap();
+        for _ in 0..3 {
+            cx.update_window(handle, |_, w, cx| w.render_frame(cx))
+                .unwrap();
+            cx.run_until_parked();
+        }
+        if !mock {
+            cx.capture_screenshot(handle)
+                .unwrap()
+                .save("/tmp/twstock-gpui-palette.png")
+                .unwrap();
+        }
+        cx.update_window(handle, |_, w, cx| w.input("8899", cx))
+            .unwrap();
+        cx.advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+        for _ in 0..3 {
+            cx.update_window(handle, |_, w, cx| w.render_frame(cx))
+                .unwrap();
+            cx.run_until_parked();
+        }
+        cx.update_window(handle, |_, w, cx| {
+            w.press("down", cx);
+            w.press("enter", cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        let items = parse_watchlist(
+            &std::fs::read_to_string(&path).expect("Enter must persist the selected result"),
+        )
+        .unwrap();
+        assert_eq!(items.len(), if mock { 1 } else { 2 });
+        assert!(
+            items
+                .iter()
+                .any(|i| i.symbol.code == "889909" && i.tick_rule == TickRule::Etf),
+            "down key must select the second filtered result"
+        );
+        for _ in 0..3 {
+            cx.update_window(handle, |_, w, cx| w.render_frame(cx))
+                .unwrap();
+            cx.run_until_parked();
+        }
+        if mock {
+            cx.update_window(handle, |_, w, _| {
+                assert!(w.find("palette-message").label().unwrap().contains("切換"))
+            })
+            .unwrap();
+        }
+        let before = std::fs::read_to_string(&path).unwrap();
+        cx.update_window(handle, |_, w, cx| w.press("enter", cx))
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+        if !mock {
+            cx.update_window(handle, |_, w, cx| {
+                w.press("cmd-a", cx);
+                w.input("889908", cx);
+            })
+            .unwrap();
+            cx.advance_clock(Duration::from_secs(1));
+            cx.run_until_parked();
+            for _ in 0..3 {
+                cx.update_window(handle, |_, w, cx| w.render_frame(cx))
+                    .unwrap();
+                cx.run_until_parked();
+            }
+            cx.update_window(handle, |_, w, cx| w.press("enter", cx))
+                .unwrap();
+            cx.run_until_parked();
+            cx.update_window(handle, |_, w, cx| {
+                w.render_frame(cx);
+                assert!(w.find("palette-message").label().unwrap().contains("上限"));
+            })
+            .unwrap();
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+        }
+        cx.update_window(handle, |_, w, cx| w.press("escape", cx))
+            .unwrap();
+        for _ in 0..3 {
+            cx.update_window(handle, |_, w, cx| w.render_frame(cx))
+                .unwrap();
+            cx.run_until_parked();
+        }
+        if !mock {
+            cx.update_window(handle, |_, w, cx| {
+                w.click(("row", 1usize), cx);
+                w.press("backspace", cx);
+            })
+            .unwrap();
+            cx.run_until_parked();
+            assert_eq!(
+                parse_watchlist(&std::fs::read_to_string(&path).unwrap())
+                    .unwrap()
+                    .len(),
+                1
+            );
+            for _ in 0..3 {
+                cx.update_window(handle, |_, w, cx| w.render_frame(cx))
+                    .unwrap();
+                cx.run_until_parked();
+            }
+            cx.update_window(handle, |_, w, cx| {
+                w.click(("row", 0usize), cx);
+                w.click("watchlist-actions", cx);
+                assert!(w.find("popup-menu").visible());
+                w.press("down", cx);
+                w.press("enter", cx);
+            })
+            .unwrap();
+            cx.run_until_parked();
+            assert!(
+                parse_watchlist(&std::fs::read_to_string(&path).unwrap())
+                    .unwrap()
+                    .is_empty(),
+                "visible remove menu must persist an empty list"
+            );
+        }
+    }
+}
 fn main() {
+    palette_rendering();
+    palette_workflow();
+    period_rendering();
     reference_price_rendering(ThemeMode::Dark);
     reference_price_rendering(ThemeMode::Light);
     for count in [1, 3] {

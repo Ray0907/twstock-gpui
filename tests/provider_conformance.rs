@@ -222,3 +222,48 @@ fn r8_history_provider_recovers_after_an_overflow_response() {
         1
     );
 }
+
+#[test]
+fn subscriptions_change_without_recreating_the_feed() {
+    use futures::StreamExt;
+    struct Fixture;
+    impl HttpTransport for Fixture {
+        fn get(&mut self, _: &str) -> Result<String, String> {
+            Ok(include_str!("fixtures/mis.json").into())
+        }
+    }
+    let a = Symbol::new(Market::Listed, "889901").unwrap();
+    let b = Symbol::new(Market::Listed, "889902").unwrap();
+    let mut provider = MisProvider::with_transport(Fixture);
+    let mut stream = provider.subscribe(vec![a.clone()]);
+    futures::executor::block_on(async {
+        loop {
+            if matches!(stream.next().await,Some(MarketEvent::Quote(q)) if q.symbol==a) {
+                break;
+            }
+        }
+        provider.resubscribe(vec![b.clone()]);
+        let timeout = futures::channel::oneshot::channel();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(12));
+            let _ = timeout.0.send(());
+        });
+        let next = async {
+            loop {
+                if let Some(MarketEvent::Quote(q)) = stream.next().await
+                    && q.symbol == b
+                {
+                    return;
+                }
+            }
+        };
+        futures::pin_mut!(next);
+        assert!(
+            matches!(
+                futures::future::select(next, timeout.1).await,
+                futures::future::Either::Left(_)
+            ),
+            "subscription update did not reach the existing worker"
+        );
+    });
+}

@@ -1,5 +1,5 @@
 use chrono::NaiveDate;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
@@ -48,7 +48,7 @@ impl fmt::Display for Price {
         )
     }
 }
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, Eq, PartialEq, Hash)]
 pub enum Market {
     #[default]
     #[serde(alias = "tse", alias = "listed")]
@@ -70,7 +70,7 @@ impl Market {
         }
     }
 }
-#[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq, Hash)]
 pub struct Symbol {
     pub market: Market,
     pub code: String,
@@ -90,7 +90,7 @@ impl Symbol {
         })
     }
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub enum TickRule {
     Stock,
     Etf,
@@ -131,12 +131,12 @@ impl TickRule {
         Price((price.0 + t / 2) / t * t)
     }
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub enum LimitRule {
     Source,
     Percent(u32),
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub struct Instrument {
     pub symbol: Symbol,
     pub name: String,
@@ -146,12 +146,7 @@ pub struct Instrument {
 }
 impl Instrument {
     pub fn new(symbol: Symbol) -> Self {
-        // shortcut: ETF kind follows the code prefix; use directory metadata for other instrument classes.
-        let tick_rule = if symbol.code.starts_with("00") {
-            TickRule::Etf
-        } else {
-            TickRule::Stock
-        };
+        let tick_rule = TickRule::Stock;
         Self {
             name: symbol.code.clone(),
             symbol,
@@ -171,6 +166,8 @@ pub enum SessionState {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Timeframe {
     Day,
+    Week,
+    Month,
 }
 #[derive(Clone, Debug)]
 pub struct DateRange {

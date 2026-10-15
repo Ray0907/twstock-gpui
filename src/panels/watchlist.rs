@@ -73,6 +73,9 @@ impl TableDelegate for WatchlistDelegate {
         }
     }
 }
+#[derive(Clone)]
+pub struct RemoveSelected;
+gpui_kit::actions!(watchlist, [RemoveWatch]);
 pub struct WatchlistPanel {
     pub table: Entity<TableState<WatchlistDelegate>>,
     _highlight: Subscription,
@@ -120,6 +123,7 @@ impl Focusable for WatchlistPanel {
     }
 }
 impl EventEmitter<PanelEvent> for WatchlistPanel {}
+impl EventEmitter<RemoveSelected> for WatchlistPanel {}
 impl BasePanel for WatchlistPanel {
     fn panel_name(&self) -> &'static str {
         "watchlist"
@@ -130,7 +134,13 @@ impl BasePanel for WatchlistPanel {
 }
 impl Panel for WatchlistPanel {
     fn title(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        parts::panel_header("自選", cx)
+        let entity = cx.entity().downgrade();
+        parts::watch_heading(
+            std::rc::Rc::new(move |_, _, cx| {
+                let _ = entity.update(cx, |_, cx| cx.emit(RemoveSelected));
+            }),
+            cx,
+        )
     }
     fn tab_name(&self, _: &App) -> Option<SharedString> {
         Some("自選".into())
@@ -139,6 +149,8 @@ impl Panel for WatchlistPanel {
 impl Render for WatchlistPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         parts::pane("watchlist-panel")
+            .key_context("Watchlist")
+            .on_action(cx.listener(|_, _: &RemoveWatch, _, cx| cx.emit(RemoveSelected)))
             .on_prepaint({
                 let table = self.table.clone();
                 move |bounds, window, cx| {

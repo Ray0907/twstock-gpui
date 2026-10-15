@@ -132,7 +132,10 @@ fn r6_limit_distance_walks_actual_stock_and_etf_ticks() {
         ("889901", "1000", "998.00", "997.00"),
     ] {
         let symbol = Symbol::new(Market::Listed, code).unwrap();
-        let i = Instrument::new(symbol.clone());
+        let mut i = Instrument::new(symbol.clone());
+        if code == "0099X" {
+            i.tick_rule = TickRule::Etf;
+        }
         let mut s = MarketStore::new(Capabilities::mis());
         s.add_instrument(i.clone());
         for (last, expected) in [(near, true), (far, false)] {
@@ -162,7 +165,10 @@ fn r6_limit_distance_walks_actual_stock_and_etf_ticks() {
         ("889901", "999.00", "1005.00", "1010.00"),
     ] {
         let symbol = Symbol::new(Market::Listed, code).unwrap();
-        let i = Instrument::new(symbol.clone());
+        let mut i = Instrument::new(symbol.clone());
+        if code == "0099X" {
+            i.tick_rule = TickRule::Etf;
+        }
         let mut s = MarketStore::new(Capabilities::mis());
         s.add_instrument(i.clone());
         for (last, expected) in [(near, true), (far, false)] {

@@ -218,6 +218,7 @@ fn history_backfills_an_empty_current_month() {
 #[test]
 fn limit_proximity_uses_instrument_ticks_without_floating_point() {
     let mut instrument = Instrument::new(Symbol::new(Market::Listed, "0099X").unwrap());
+    instrument.tick_rule = TickRule::Etf;
     let mut store = MarketStore::new(Capabilities::mis());
     let mut quote = update(100, Some("97.00"));
     quote.limit_up = Some("97.10".parse().unwrap());

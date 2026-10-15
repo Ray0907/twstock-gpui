@@ -6,7 +6,7 @@ use super::{
     text::{self, TextRole},
 };
 use crate::{
-    market::{Candle, ChartSeries, NiceTicks, Price, nice_ticks},
+    market::{Candle, ChartSeries, NiceTicks, Price, Timeframe, nice_ticks},
     quotes::format_price,
 };
 use gpui_kit::component::{
@@ -186,6 +186,7 @@ pub struct TradingPlot {
     data: ChartSeries,
     current: Option<Price>,
     hover: Option<TooltipState>,
+    period: Timeframe,
 }
 impl TradingPlot {
     pub fn new(data: ChartSeries, current: Option<Price>) -> Self {
@@ -193,8 +194,17 @@ impl TradingPlot {
             data,
             current,
             hover: None,
+            period: Timeframe::Day,
         }
     }
+}
+pub fn date_text(date: chrono::NaiveDate, period: Timeframe) -> String {
+    date.format(if period == Timeframe::Month {
+        "%Y/%m"
+    } else {
+        "%m/%d"
+    })
+    .to_string()
 }
 impl IntoElement for TradingPlot {
     type Element = PlotElement<Self>;
@@ -489,7 +499,7 @@ impl Plot for TradingPlot {
             .x_label([0, last / 4, last / 2, last * 3 / 4, last].map(|ix| {
                 let x = g.candle(ix, &self.data.candles[ix]).x;
                 AxisText::new(
-                    self.data.candles[ix].time.format("%m/%d").to_string(),
+                    date_text(self.data.candles[ix].time, self.period),
                     px(x),
                     muted,
                 )
@@ -550,7 +560,7 @@ impl Plot for TradingPlot {
         let info: SharedString = if self.hover.is_some() {
             format!(
                 "{}  開 {}  高 {}  低 {}  收 {}  量 {} 張",
-                c.time.format("%m/%d"),
+                date_text(c.time, self.period),
                 price_text(c.open),
                 price_text(c.high),
                 price_text(c.low),
@@ -559,7 +569,16 @@ impl Plot for TradingPlot {
             )
             .into()
         } else {
-            "日線 · 價格／成交量".into()
+            format!(
+                "{}線 · 價格／成交量 · {} 根",
+                match self.period {
+                    Timeframe::Day => "日",
+                    Timeframe::Week => "週",
+                    Timeframe::Month => "月",
+                },
+                self.data.candles.len()
+            )
+            .into()
         };
         let info = truncate_text_to_width(&info, font, bounds.size.width.as_f32(), window);
         label(
@@ -635,7 +654,7 @@ impl Plot for TradingPlot {
                 window,
                 cx,
             );
-            let date: SharedString = c.time.format("%m/%d").to_string().into();
+            let date: SharedString = date_text(c.time, self.period).into();
             let width = px(measure_text_width(&date, font, window)) + font * 2. / 3.;
             let frame = Bounds::new(
                 point(
@@ -648,7 +667,7 @@ impl Plot for TradingPlot {
         }
     }
 }
-pub fn view(data: ChartSeries, current: Option<Price>, cx: &App) -> Div {
+pub fn view(data: ChartSeries, current: Option<Price>, period: Timeframe, cx: &App) -> Div {
     gpui_kit::component::v_flex()
         .flex_1()
         .min_h_0()
@@ -657,11 +676,23 @@ pub fn view(data: ChartSeries, current: Option<Price>, cx: &App) -> Div {
         .child(
             text::frame(TextRole::Caption, cx)
                 .id("candle-region")
+                .aria_label(format!(
+                    "{}線 · {} 根",
+                    match period {
+                        Timeframe::Day => "日",
+                        Timeframe::Week => "週",
+                        Timeframe::Month => "月",
+                    },
+                    data.candles.len()
+                ))
                 .test_support()
                 .flex_1()
                 .min_w_0()
                 .h_full()
-                .child(TradingPlot::new(data, current)),
+                .child(TradingPlot {
+                    period,
+                    ..TradingPlot::new(data, current)
+                }),
         )
 }
 

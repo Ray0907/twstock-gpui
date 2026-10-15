@@ -218,6 +218,7 @@ pub struct MisProvider<T: HttpTransport = CurlSession> {
     ready: bool,
     retry: u64,
     pub bootstrap_error: Option<String>,
+    subscriptions: Arc<Mutex<Vec<Symbol>>>,
 }
 impl MisProvider<CurlSession> {
     pub fn new() -> Result<Self, String> {
@@ -228,10 +229,14 @@ impl<T: HttpTransport> MisProvider<T> {
     pub fn with_transport(transport: T) -> Self {
         Self {
             transport: Arc::new(Mutex::new(transport)),
+            subscriptions: Arc::new(Mutex::new(Vec::new())),
             ready: false,
             retry: 5,
             bootstrap_error: None,
         }
+    }
+    pub fn resubscribe(&self, symbols: Vec<Symbol>) {
+        *self.subscriptions.lock().unwrap() = symbols;
     }
     pub fn capabilities(&self) -> Capabilities {
         Capabilities::mis()
@@ -306,8 +311,10 @@ impl<T: HttpTransport> QuoteFeed for MisProvider<T> {
         self.capabilities()
     }
     fn subscribe(&mut self, symbols: Vec<Symbol>) -> EventStream {
+        self.resubscribe(symbols);
         let mut worker = Self {
             transport: self.transport.clone(),
+            subscriptions: self.subscriptions.clone(),
             ready: false,
             retry: 5,
             bootstrap_error: None,
@@ -315,7 +322,12 @@ impl<T: HttpTransport> QuoteFeed for MisProvider<T> {
         let (mut sender, stream) = latest_events(Capabilities::mis().max_subscriptions);
         thread::spawn(move || {
             while !sender.is_closed() {
-                let events = worker.poll_once(&symbols, super::now());
+                let symbols = worker.subscriptions.lock().unwrap().clone();
+                let events = if symbols.is_empty() {
+                    vec![MarketEvent::Link(LinkState::Live)]
+                } else {
+                    worker.poll_once(&symbols, super::now())
+                };
                 let delay = events
                     .iter()
                     .find_map(|e| {
@@ -328,10 +340,17 @@ impl<T: HttpTransport> QuoteFeed for MisProvider<T> {
                     .unwrap_or(5)
                     .max(5);
                 sender.publish(events);
-                let until = Instant::now() + Duration::from_secs(delay);
+                let waiting = Instant::now();
+                let until = waiting + Duration::from_secs(delay);
                 while Instant::now() < until {
                     if sender.is_closed() {
                         return;
+                    }
+                    if waiting.elapsed() >= Duration::from_secs(5)
+                        && *worker.subscriptions.lock().unwrap() != symbols
+                    {
+                        worker.retry = 5;
+                        break;
                     }
                     thread::sleep(Duration::from_millis(100));
                 }
