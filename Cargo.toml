@@ -16,6 +16,7 @@ futures = "0.3"
 tempfile = "3"
 
 [dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
 proc-macro2 = { version = "1", features = ["span-locations"] }
 gpui-kit = { version = "0.7.3", features = ["test-support"] }
 

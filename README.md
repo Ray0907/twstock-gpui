@@ -100,6 +100,8 @@ cargo test --test rendering
 ```
 
 - `cargo test --test rendering` 在不開視窗的情況下用 GPU 離屏渲染，輸出 `/tmp/twstock-gpui-*.png`，並檢查像素、版面邊界、選取、面板拖曳與縮放。可在 SSH 下執行。固定使用範例資料，不讀你的設定也不連網。
+- 8 個靜態場景另比對 `tests/snapshots/` 的 golden PNG：dark、light、crosshair、dark-small、weekly、monthly、position、volume-clip。原圖與 golden 都以 2×2 box filter 縮小一半；每色頻差 ≤2 忽略，超過 0.05% 像素不同即失敗，尺寸必須一致。loading 的 Spinner 與 palette 的游標閃爍不納入。不同 OS／字型／GPU 的文字渲染可能造成差異，更新前請人工看圖。
+- 更新基準：`UPDATE_SNAPSHOTS=1 cargo test --test rendering`，再看過 PNG 與 diff；沒有這個旗標時，缺基準也會失敗。差異圖和實際圖保存在 `/tmp/twstock-gpui-snapshot/<name>.diff.png`、`<name>.actual.png`。比較器單元測試隨 `cargo test` 執行；GPU 快照仍需另外執行上述 rendering 命令。
 - 網路測試預設不跑。要對真實來源做一次煙霧測試：
 
   ```sh

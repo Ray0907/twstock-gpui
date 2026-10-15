@@ -3068,6 +3068,7 @@ dependencies = [
  "futures",
  "gpui-kit",
  "html5ever",
+ "image",
  "proc-macro2",
  "serde",
  "serde_json",

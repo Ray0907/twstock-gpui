@@ -378,6 +378,8 @@ fn render(mode: ThemeMode, width: u32, height: u32, path: &str) -> Vec<u8> {
     if width == 1080 && mode == ThemeMode::Dark {
         image.save("/tmp/twstock-gpui-position.png").unwrap();
         image.save("/tmp/twstock-gpui-volume-clip.png").unwrap();
+        snapshot::assert_snapshot("position", &image);
+        snapshot::assert_snapshot("volume-clip", &image);
     }
     let pixels = |bounds: Bounds<gpui_kit::Pixels>| {
         let image = &image;
@@ -536,6 +538,12 @@ fn render(mode: ThemeMode, width: u32, height: u32, path: &str) -> Vec<u8> {
     let colors: HashSet<_> = image.pixels().map(|pixel| pixel.0).collect();
     assert!(colors.len() > 128, "UI capture must not be blank");
     image.save(path).expect("PNG capture must be saved");
+    match (mode.is_dark(), width, height) {
+        (true, 1080, 720) => snapshot::assert_snapshot("dark", &image),
+        (false, 1080, 720) => snapshot::assert_snapshot("light", &image),
+        (true, 900, 600) => snapshot::assert_snapshot("dark-small", &image),
+        _ => {}
+    }
     println!(
         "{mode:?}: {}×{}, scale {scale}, {} colors → {path}",
         image.width(),
@@ -613,6 +621,7 @@ fn render(mode: ThemeMode, width: u32, height: u32, path: &str) -> Vec<u8> {
         );
         assert!((geometry.price_y(geometry.cursor_price(y)) - y).abs() < px(0.02));
         cross.save("/tmp/twstock-gpui-crosshair.png").unwrap();
+        snapshot::assert_snapshot("crosshair", &cross);
         volume::check(&mut cx, handle, plot_bounds, &data, snapshot.last);
     }
     image.into_raw()
@@ -910,7 +919,16 @@ fn period_rendering() {
             w.render_frame(cx);
         })
         .unwrap();
-        cx.capture_screenshot(handle).unwrap().save(path).unwrap();
+        let image = cx.capture_screenshot(handle).unwrap();
+        image.save(path).unwrap();
+        snapshot::assert_snapshot(
+            if id == "period-week" {
+                "weekly"
+            } else {
+                "monthly"
+            },
+            &image,
+        );
     }
 }
 
@@ -1378,6 +1396,8 @@ fn position_layout_cases() {
         .save("/tmp/twstock-gpui-position-outside.png")
         .unwrap();
 }
+#[path = "support/snapshot.rs"]
+mod snapshot;
 #[path = "support/states.rs"]
 mod states;
 #[path = "support/volume.rs"]
