@@ -13,8 +13,10 @@ struct Watchlist {
     watchlist: Vec<Entry>,
 }
 pub fn load_watchlist() -> Result<Option<Vec<Instrument>>, String> {
-    let home = std::env::var_os("HOME").ok_or("HOME is unavailable")?;
-    let path = std::path::PathBuf::from(home).join(".config/twstock-gpui/watchlist.toml");
+    load_watchlist_at(&watchlist_path()?)
+}
+/// Read the resolved path once; callers keep it for subsequent edits.
+pub fn load_watchlist_at(path: &std::path::Path) -> Result<Option<Vec<Instrument>>, String> {
     match std::fs::read_to_string(path) {
         Ok(text) => parse_watchlist(&text).map(Some),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -43,10 +45,24 @@ pub fn parse_watchlist(text: &str) -> Result<Vec<Instrument>, String> {
 }
 
 pub fn watchlist_path() -> Result<std::path::PathBuf, String> {
-    Ok(
-        std::path::PathBuf::from(std::env::var_os("HOME").ok_or("HOME is unavailable")?)
-            .join(".config/twstock-gpui/watchlist.toml"),
-    )
+    let home = std::path::PathBuf::from(std::env::var_os("HOME").ok_or("HOME is unavailable")?);
+    let current = home.join(".config/twstock-gpui/watchlist.toml");
+    if current
+        .try_exists()
+        .map_err(|e| format!("自選設定讀取失敗：{e}"))?
+    {
+        return Ok(current);
+    }
+    // Read legacy config in place only when the new file is absent; never migrate it.
+    let legacy = home.join(".config/twstock-gpui/watchlist.toml");
+    if legacy
+        .try_exists()
+        .map_err(|e| format!("自選設定讀取失敗：{e}"))?
+    {
+        Ok(legacy)
+    } else {
+        Ok(current)
+    }
 }
 fn matches_symbol(market: Option<&str>, code: Option<&str>, symbol: &Symbol) -> bool {
     code == Some(symbol.code.as_str())

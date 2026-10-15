@@ -46,7 +46,9 @@ pub fn check(
                     );
                     assert_eq!(
                         labels.volume.text.as_ref(),
-                        twstock_gpui::design::format::volume(c.volume as f64 / data.lot_size as f64)
+                        twstock_gpui::design::format::volume(
+                            c.volume as f64 / data.lot_size as f64
+                        )
                     );
                     if index == 0 {
                         assert_eq!(labels.volume.text.as_ref(), "0");

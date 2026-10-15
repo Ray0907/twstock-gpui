@@ -12,7 +12,7 @@ Screenshots use invented sample data (fictional instruments with codes starting 
 
 - **Three-column workspace:** watchlist (with sparklines), chart, and quote detail (order book, buy/sell ratio, volume and position). Panels can be dragged and resized.
 - **Position block** under the order book: today's price range bar (low, high, previous close, open, gold last price; limit-up/limit-down are labelled below the axis), the percentile of the last price within the loaded daily range, and today's cumulative volume against the average of the previous 5 days. With no trade price, no last price is drawn and a reference price is labelled as such. When the source has no tick-by-tick trades, that section takes no space. The quote panel scrolls in small windows.
-- **Chart** drawn with gpui-kit's plot components: candles (hollow when the close is up, solid when down, so direction does not rely on colour alone), MA5 / MA10 / MA20, a volume sub-chart, a gold crosshair with axis labels, high/low marks, and a last-price line.
+- **Chart** drawn with gpui-kit's plot components: candles (solid when the close is up, hollow when down, so direction does not rely on colour alone), MA5 / MA10 / MA20, a volume sub-chart, a gold crosshair with axis labels, high/low marks, and a last-price line.
 - **Volume clipping:** a robust ceiling `nice(P95 × 1.2)` is applied only when one extreme bar would flatten the rest, that is, when the visible maximum exceeds 2.5× the ceiling. Clipped bars show a break mark and the true volume; the title reads "clipped at N". The crosshair still reads the raw volume. Day, week and month share the rule.
 - **Volume numbers:** lots are rounded to whole lots with thousands separators; axis ticks keep `k` / `M` abbreviations. With the cursor on a bar, the right axis of the volume chart shows that bar's actual volume; without a cursor, the latest volume is shown faintly. Date, price and volume labels avoid axis ticks.
 - **Panel states:** loading shows a centered spinner with a muted note, failures include the reason, and empty or too-small panels are centered in the content area. "0 daily bars" is never shown while the recent range is still loading.
@@ -69,7 +69,7 @@ Run it in a desktop session with a display; a window cannot be opened over SSH. 
 
 ### Watchlist
 
-Create `~/.config/twstock-gpui/watchlist.toml`:
+Create `~/.config/twstock-gpui/watchlist.toml`; only when it is absent does the app read the legacy `~/.config/twstock-gpui/watchlist.toml` in place, with additions/removals written back to the loaded file without copying or moving it:
 
 ```toml
 [[watchlist]]

@@ -1,6 +1,6 @@
 use futures::StreamExt;
-use twstock_gpui::market::*;
 use std::collections::VecDeque;
+use twstock_gpui::market::*;
 
 struct FixtureHttp(VecDeque<Result<String, String>>);
 impl HttpTransport for FixtureHttp {

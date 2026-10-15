@@ -222,7 +222,8 @@ fn render(mode: ThemeMode, width: u32, height: u32, path: &str) -> Vec<u8> {
                 );
             }
             let bounds = window.find("candle-region").bounds();
-            let layout = twstock_gpui::design::chart::ChartLayout::new(bounds, cx.theme().font_size);
+            let layout =
+                twstock_gpui::design::chart::ChartLayout::new(bounds, cx.theme().font_size);
             assert!(layout.price.bottom() < layout.volume.top());
             assert!(layout.volume.bottom() < bounds.size.height);
             assert_eq!(window.find(("row", 0_usize)).selected(), Some(true));
@@ -684,7 +685,7 @@ fn watchlist_edge_cases(count: usize) {
         })
         .unwrap();
     let image = cx.capture_screenshot(handle).unwrap();
-    image.save("/tmp/twstock-twstock-gpui-edge.png").unwrap();
+    image.save("/tmp/twstock-gpui-list-edge.png").unwrap();
     let scale = image.width() as f32 / 1080.;
     let x = ((panel.left() + px(20.)).as_f32() * scale) as u32;
     let first = ((last.bottom() + px(4.)).as_f32() * scale) as u32;

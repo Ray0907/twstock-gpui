@@ -47,7 +47,14 @@ impl Workspace {
         Self::with_store(MockProvider::new().store(), window, cx)
     }
     pub fn configured(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let store = match load_watchlist() {
+        let (path, loaded) = match watchlist_path() {
+            Ok(path) => {
+                let loaded = load_watchlist_at(&path);
+                (Some(path), loaded)
+            }
+            Err(reason) => (None, Err(reason)),
+        };
+        let store = match loaded {
             Ok(None) => MockProvider::new().store(),
             Ok(Some(items)) => {
                 let mut store = MarketStore::new(Capabilities::mis());
@@ -66,7 +73,7 @@ impl Workspace {
             }
         };
         let mut this = Self::with_store(store, window, cx);
-        this.path = watchlist_path().ok();
+        this.path = path;
         this.live = true;
         this.load_directory(window, cx);
         this

@@ -1,5 +1,5 @@
-use twstock_gpui::market::*;
 use std::time::Instant;
+use twstock_gpui::market::*;
 fn html(market: &str) -> String {
     format!(
         "<table><tr><td>股票</td></tr><tr><td>889901　編造晶圓</td><td>fake</td><td>2026/01/01</td><td>{market}</td><td>半導體</td><td>ESVUFR</td><td></td></tr><tr><td>ETF</td></tr><tr><td>889902　編造基金</td><td>fake</td><td>2026/01/01</td><td>{market}</td><td></td><td>CEOTHR</td><td></td></tr><tr><td>ETN</td></tr><tr><td>889903　編造票券</td><td></td><td></td><td>{market}</td><td></td><td></td><td></td></tr></table>"

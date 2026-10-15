@@ -16,7 +16,7 @@ fn main() {
 
             let options = twstock_gpui::design::space::window_options(cx);
             gpui_kit::open_window(options, cx, |window, cx| {
-                window.set_window_title("台股看盤");
+                window.set_window_title("twstock-gpui");
                 window.activate_window();
                 twstock_gpui::theme::apply(ThemeMode::Dark, Some(window), cx);
                 cx.new(|cx| Workspace::configured(window, cx))

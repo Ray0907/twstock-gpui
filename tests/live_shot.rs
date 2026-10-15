@@ -7,12 +7,12 @@ use gpui_kit::{
     px, size,
     test::TestWindowExt,
 };
-use twstock_gpui::{Workspace, market::*};
 use std::{
     sync::{Arc, mpsc},
     thread,
     time::{Duration, Instant},
 };
+use twstock_gpui::{Workspace, market::*};
 
 enum Loaded {
     Quote(Vec<MarketEvent>),

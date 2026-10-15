@@ -1,5 +1,5 @@
-use twstock_gpui::market::*;
 use std::{fs, path::Path};
+use twstock_gpui::market::*;
 
 fn symbol() -> Symbol {
     Symbol::new(Market::Listed, "889901").unwrap()
