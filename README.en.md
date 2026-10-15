@@ -160,4 +160,6 @@ tests/
 
 ## License
 
-Personal project, no license. The gpui-kit it uses is Apache-2.0.
+[Apache-2.0](LICENSE). The gpui-kit it uses is also Apache-2.0.
+
+The license covers the code in this repo only. Use and redistribution of TWSE market data are governed separately; check with TWSE before any commercial use.

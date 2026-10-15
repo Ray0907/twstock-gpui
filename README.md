@@ -161,4 +161,6 @@ tests/
 
 ## 授權
 
-自用專案，未訂授權。使用的 gpui-kit 為 Apache-2.0。
+[Apache-2.0](LICENSE)。使用的 gpui-kit 同為 Apache-2.0。
+
+授權只涵蓋本 repo 的程式碼；證交所行情資料的使用與再散布另有規定，商用前請自行向證交所確認。
