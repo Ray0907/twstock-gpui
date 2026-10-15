@@ -51,8 +51,14 @@ pub fn item(item: &Instrument, watched: bool, cx: &App) -> ListItem {
                 }),
         )
 }
-pub fn empty(cx: &App) -> Div {
-    parts::panel_header("沒有符合的股票或 ETF", cx)
+pub fn empty(status: Option<super::state::PanelState>, cx: &App) -> impl IntoElement {
+    let state =
+        status.unwrap_or_else(|| super::state::PanelState::Empty("沒有符合的股票或 ETF".into()));
+    let label = state.label();
+    super::state::panel(state, cx)
+        .id("palette-message")
+        .aria_label(label)
+        .test_support()
 }
 pub fn body(
     list: &Entity<ListState<PaletteDelegate>>,
@@ -68,12 +74,14 @@ pub fn body(
                 .search_placeholder("輸入代號前綴或名稱")
                 .h(rems(23.)),
         )
-        .child(
-            text::text(TextRole::Caption, message.clone(), cx)
-                .id("palette-message")
-                .aria_label(message)
-                .test_support(),
-        )
+        .when(list.read(cx).delegate().status.is_none(), |el| {
+            el.child(
+                text::text(TextRole::Caption, message.clone(), cx)
+                    .id("palette-message")
+                    .aria_label(message)
+                    .test_support(),
+            )
+        })
 }
 pub fn dialog(dialog: Dialog, palette: Entity<Palette>, cx: &App) -> Dialog {
     dialog

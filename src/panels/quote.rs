@@ -74,7 +74,11 @@ impl Render for QuotePanel {
             .delegate()
             .quote(table.selected_row().unwrap_or(0), cx)
         else {
-            return parts::panel_header("尚無行情", cx).into_any_element();
+            return crate::design::state::panel(
+                crate::design::state::PanelState::Empty("尚無行情 · 請加入自選商品".into()),
+                cx,
+            )
+            .into_any_element();
         };
         let mut pane = parts::quote_pane()
             .track_focus(&self.focus)

@@ -24,7 +24,7 @@ pub struct Quote {
     pub low: f64,
     pub limit_up: f64,
     pub limit_down: f64,
-    pub volume: u64,
+    pub volume: f64,
     pub volume_known: bool,
     pub bids: Vec<(f64, u64)>,
     pub asks: Vec<(f64, u64)>,
@@ -32,6 +32,7 @@ pub struct Quote {
     pub trades: Vec<Trade>,
     pub has_trades: bool,
     pub history_error: Option<String>,
+    pub history_loaded: bool,
     pub position: market::PositionSummary,
     near_limit: bool,
     computed_change: f64,
@@ -99,7 +100,7 @@ pub fn from_store(store: &MarketStore, row: usize) -> Option<Quote> {
         low: value(q.low),
         limit_up: value(q.limit_up),
         limit_down: value(q.limit_down),
-        volume: q.volume.unwrap_or(0) / instrument.lot_size,
+        volume: q.volume.unwrap_or(0) as f64 / instrument.lot_size.max(1) as f64,
         volume_known: q.volume.is_some(),
         bids: book(&q.bids),
         asks: book(&q.asks),
@@ -107,6 +108,7 @@ pub fn from_store(store: &MarketStore, row: usize) -> Option<Quote> {
         trades,
         has_trades: store.capabilities.has_trades,
         history_error: store.history_errors.get(symbol).cloned(),
+        history_loaded: store.histories.contains_key(symbol),
         position: market::position_summary(
             q,
             store.histories.get(symbol).map_or(&[], Vec::as_slice),
@@ -136,6 +138,26 @@ pub fn sample() -> Vec<Quote> {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn odd_lots_are_only_rounded_at_display_time() {
+        use crate::market::*;
+        let mut store = MarketStore::new(Capabilities::mis());
+        let symbol = Symbol::new(Market::Listed, "991099").unwrap();
+        store.add_instrument(Instrument::new(symbol.clone()));
+        store.apply(
+            MarketEvent::Quote(QuoteUpdate {
+                symbol: symbol.clone(),
+                as_of: Some(100),
+                volume: Some(469_130_535),
+                ..Default::default()
+            }),
+            100,
+        );
+        let projected = super::from_store(&store, 0).unwrap();
+        assert_eq!(projected.volume, 469130.535);
+        assert_eq!(crate::design::format::volume(projected.volume), "469,131");
+        assert_eq!(store.snapshot(&symbol).unwrap().volume, Some(469_130_535));
+    }
     #[test]
     fn r9_reference_projection_does_not_claim_a_trade() {
         use crate::market::*;

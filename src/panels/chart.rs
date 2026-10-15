@@ -56,7 +56,11 @@ impl Render for ChartPanel {
             .delegate()
             .quote(table.selected_row().unwrap_or(0), cx)
         else {
-            return parts::panel_header("尚無行情", cx).into_any_element();
+            return crate::design::state::panel(
+                crate::design::state::PanelState::Empty("尚無行情 · 請加入自選商品".into()),
+                cx,
+            )
+            .into_any_element();
         };
         parts::pane("chart-panel")
             .track_focus(&self.focus)
@@ -69,31 +73,18 @@ impl Render for ChartPanel {
                 }),
                 cx,
             ))
-            .child(
-                if let Some((series, current)) = table
+            .child(chart::history_view(
+                table
                     .delegate()
-                    .chart_series(table.selected_row().unwrap_or(0), cx)
-                    .filter(|(s, _)| !s.candles.is_empty())
-                {
-                    let period = [
-                        crate::market::Timeframe::Day,
-                        crate::market::Timeframe::Week,
-                        crate::market::Timeframe::Month,
-                    ][self.period];
-                    match series.for_period(period) {
-                        Ok(series) => chart::view(series, current, period, cx),
-                        Err(error) => parts::panel_header(error, cx),
-                    }
-                } else {
-                    parts::panel_header(
-                        quote
-                            .history_error
-                            .clone()
-                            .unwrap_or_else(|| "歷史載入中".into()),
-                        cx,
-                    )
-                },
-            )
+                    .chart_series(table.selected_row().unwrap_or(0), cx),
+                quote.history_error.as_deref(),
+                [
+                    crate::market::Timeframe::Day,
+                    crate::market::Timeframe::Week,
+                    crate::market::Timeframe::Month,
+                ][self.period],
+                cx,
+            ))
             .into_any_element()
     }
 }

@@ -1,4 +1,5 @@
 //! One plot owns both subplots, all projections and native hover tracking.
+mod labels;
 use super::{
     color::{self, ColorRole},
     direction::{CandleBody, Direction},
@@ -12,13 +13,14 @@ use crate::{
 use gpui_kit::component::{
     ActiveTheme,
     plot::{
-        AxisText, Curve, Grid, Plot, PlotAxis, PlotElement, PlotHover, TooltipState, axis_gutter,
+        Curve, Grid, Plot, PlotElement, PlotHover, TooltipState, axis_gutter,
         label::{PlotLabel, TEXT_GAP, TEXT_SIZE, Text, measure_text_width, truncate_text_to_width},
         scale::{Scale, ScaleBand, ScaleLinear},
         shape::{Bar, Line},
     },
 };
 use gpui_kit::*;
+pub use labels::{ChartLabel, ChartLabels};
 
 pub struct ChartLayout {
     pub price: Bounds<Pixels>,
@@ -260,14 +262,7 @@ fn volume_text(shares: f64, lot: u64) -> String {
     )
 }
 fn exact_volume(shares: u64, lot: u64) -> String {
-    let lot = lot.max(1);
-    if shares.is_multiple_of(lot) {
-        (shares / lot).to_string()
-    } else {
-        format!("{:.3}", shares as f64 / lot as f64)
-            .trim_end_matches('0')
-            .to_string()
-    }
+    super::format::volume(shares as f64 / lot.max(1) as f64)
 }
 pub(super) fn line(
     points: Vec<Point<f32>>,
@@ -378,22 +373,6 @@ impl Plot for TradingPlot {
             return;
         }
         if !has_space(bounds, cx.theme().font_size) {
-            let font = text::pixels(TextRole::Caption, cx.theme().font_size);
-            let hint = truncate_text_to_width(
-                &"圖表空間不足".into(),
-                font,
-                bounds.size.width.as_f32(),
-                window,
-            );
-            label(
-                hint,
-                point(px(0.), px(0.)),
-                color::get(ColorRole::Muted, cx),
-                font,
-                &bounds,
-                window,
-                cx,
-            );
             return;
         }
         let g = ChartGeometry::new(bounds, cx.theme().font_size, &self.data, self.current);
@@ -481,7 +460,7 @@ impl Plot for TradingPlot {
                         .stroke_width(px(2.))
                         .paint(&bounds, window);
                 }
-                let value: SharedString = volume_text(actual as f64, self.data.lot_size).into();
+                let value: SharedString = exact_volume(actual, self.data.lot_size).into();
                 let width = px(measure_text_width(&value, font, window));
                 label(
                     value,
@@ -519,49 +498,37 @@ impl Plot for TradingPlot {
                 .stroke_width(px(1.25))
                 .paint(&bounds, window);
         }
-        PlotAxis::new()
-            .y(g.layout.price.right())
-            .y_label(ticks.iter().map(|v| {
-                AxisText::new(
-                    price_tick(*v, g.price_ticks.step),
-                    px(g.price.tick(&(*v as f64)).unwrap()),
-                    foreground,
-                )
-                .font_size(font)
-            }))
-            .paint(&bounds, window, cx);
-        PlotAxis::new()
-            .y(g.layout.volume.right())
-            .y_label(g.volume_ticks.values.iter().map(|v| {
-                AxisText::new(
-                    volume_text(*v as f64, self.data.lot_size),
-                    px(g.volume.tick(&(*v as f64)).unwrap()),
-                    foreground,
-                )
-                .font_size(font)
-            }))
-            .paint(&bounds, window, cx);
+        let labels = ChartLabels::new(
+            &g,
+            &self.data,
+            self.current,
+            self.hover.as_ref(),
+            self.period,
+            window,
+        );
+        for tick in labels.price_ticks.iter().chain(&labels.volume_ticks) {
+            label(
+                tick.text.clone(),
+                tick.bounds.origin,
+                foreground,
+                font,
+                &bounds,
+                window,
+                cx,
+            );
+        }
+        for tick in &labels.date_ticks {
+            label(
+                tick.text.clone(),
+                tick.bounds.origin,
+                muted,
+                font,
+                &bounds,
+                window,
+                cx,
+            );
+        }
         let last = self.data.candles.len() - 1;
-        PlotAxis::new()
-            .x(g.layout.volume.bottom())
-            .x_axis(false)
-            .x_label([0, last / 4, last / 2, last * 3 / 4, last].map(|ix| {
-                let x = g.candle(ix, &self.data.candles[ix]).x;
-                AxisText::new(
-                    date_text(self.data.candles[ix].time, self.period),
-                    px(x),
-                    muted,
-                )
-                .font_size(font)
-                .align(if ix == 0 {
-                    TextAlign::Left
-                } else if ix == last {
-                    TextAlign::Right
-                } else {
-                    TextAlign::Center
-                })
-            }))
-            .paint(&bounds, window, cx);
         Grid::new()
             .y([g.layout.volume.size.height])
             .stroke(color::get(ColorRole::Border, cx))
@@ -668,10 +635,30 @@ impl Plot for TradingPlot {
             window,
             cx,
         );
-        if let Some(current) = self.current {
+        for price in &labels.price {
+            tag(price.text.clone(), price.bounds, font, &bounds, window, cx);
+        }
+        if self.hover.is_some() {
             tag(
-                price_text(current).into(),
-                g.price_tag(g.price_y(current)),
+                labels.volume.text.clone(),
+                labels.volume.bounds,
+                font,
+                &bounds,
+                window,
+                cx,
+            );
+        } else {
+            bar(
+                labels.volume.bounds,
+                muted.opacity(0.12),
+                &bounds,
+                window,
+                cx,
+            );
+            label(
+                labels.volume.text.clone(),
+                labels.volume.bounds.origin + point(font / 3., font / 3.),
+                muted,
                 font,
                 &bounds,
                 window,
@@ -695,26 +682,41 @@ impl Plot for TradingPlot {
                 .y([hover.cross_line.y - g.layout.price.top()])
                 .stroke(focus)
                 .paint(&price_bounds, window);
-            tag(
-                price_text(g.cursor_price(hover.cross_line.y)).into(),
-                g.price_tag(hover.cross_line.y),
-                font,
-                &bounds,
-                window,
-                cx,
-            );
-            let date: SharedString = date_text(c.time, self.period).into();
-            let width = px(measure_text_width(&date, font, window)) + font * 2. / 3.;
-            let frame = Bounds::new(
-                point(
-                    (hover.cross_line.x - width / 2.).clamp(px(0.), g.layout.price.right() - width),
-                    g.layout.volume.bottom() + px(3.),
-                ),
-                size(width, font * 5. / 3.),
-            );
-            tag(date, frame, font, &bounds, window, cx);
+            Grid::new()
+                .y([g.volume_bar(index, c.volume).top() - g.layout.volume.top()])
+                .stroke(focus)
+                .paint(&volume_bounds, window);
+            if let Some(date) = &labels.date {
+                tag(date.text.clone(), date.bounds, font, &bounds, window, cx);
+            }
         }
     }
+}
+pub fn history_view(
+    series: Option<(ChartSeries, Option<Price>)>,
+    error: Option<&str>,
+    period: Timeframe,
+    cx: &App,
+) -> gpui_kit::base::ObservedElement<Stateful<Div>> {
+    use super::state::{self, PanelState};
+    let body = match series {
+        Some((series, current)) if !series.candles.is_empty() => match series.for_period(period) {
+            Ok(series) => view(series, current, period, cx),
+            Err(reason) => state::panel(PanelState::Failed(reason.into()), cx),
+        },
+        _ if error.is_some() => {
+            state::panel(PanelState::Failed(error.unwrap().to_owned().into()), cx)
+        }
+        Some(_) => state::panel(PanelState::Empty("歷史無資料".into()), cx),
+        None => state::panel(PanelState::Loading("歷史載入中".into()), cx),
+    };
+    gpui_kit::component::v_flex()
+        .id("chart-region")
+        .test_support()
+        .flex_1()
+        .min_h_0()
+        .min_w_0()
+        .child(body)
 }
 pub fn volume_title(limit: Option<u64>, lot: u64) -> String {
     limit.map_or_else(
@@ -749,17 +751,50 @@ pub fn view(data: ChartSeries, current: Option<Price>, period: Timeframe, cx: &A
                 .flex_1()
                 .min_w_0()
                 .h_full()
-                .child(TradingPlot {
-                    period,
-                    ..TradingPlot::new(data, current)
-                }),
+                .child(
+                    canvas(
+                        move |bounds, window, cx| {
+                            let mut element = if !has_space(bounds, cx.theme().font_size) {
+                                super::state::panel(super::state::PanelState::InsufficientSpace, cx)
+                                    .into_any_element()
+                            } else {
+                                TradingPlot {
+                                    period,
+                                    ..TradingPlot::new(data.clone(), current)
+                                }
+                                .into_any_element()
+                            };
+                            element.layout_as_root(
+                                bounds.size.map(AvailableSpace::Definite),
+                                window,
+                                cx,
+                            );
+                            element.prepaint_at(bounds.origin, window, cx);
+                            element
+                        },
+                        |_, mut element, window, cx| element.paint(window, cx),
+                    )
+                    .size_full(),
+                ),
         )
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
-    fn volume_abbreviations_match_axis_and_clipped_labels() {
+    fn actual_volumes_are_rounded_and_grouped() {
+        for (shares, expected) in [
+            (469_130_535, "469,131"),
+            (0, "0"),
+            (999_000, "999"),
+            (1_000_000, "1,000"),
+            (1_234_567_000, "1,234,567"),
+        ] {
+            assert_eq!(super::exact_volume(shares, 1000), expected);
+        }
+    }
+    #[test]
+    fn axes_abbreviate_but_clipped_labels_show_actual_lots() {
         for (lots, expected) in [
             (999, "999"),
             (1000, "1k"),
@@ -781,10 +816,10 @@ mod tests {
             .next()
             .unwrap();
         assert!(
-            clipped.contains("volume_text(actual as f64, self.data.lot_size)"),
-            "clipped labels must use the existing axis formatter, not a copy or the exact hover formatter"
+            clipped.contains("exact_volume(actual, self.data.lot_size)"),
+            "clipped labels must show the same rounded actual quantity as hover labels"
         );
-        assert!(source.contains("volume_text(*v as f64, self.data.lot_size)"));
+        assert!(include_str!("chart/labels.rs").contains("volume_text(*v as f64, data.lot_size)"));
     }
     #[test]
     fn axes_format_nice_prices_and_scaled_quantities() {

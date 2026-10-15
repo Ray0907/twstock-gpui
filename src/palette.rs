@@ -13,6 +13,7 @@ pub struct PaletteDelegate {
     matches: Vec<Instrument>,
     query: String,
     pub watching: Vec<Symbol>,
+    pub status: Option<crate::design::state::PanelState>,
 }
 impl PaletteDelegate {
     fn search(&mut self, query: &str) {
@@ -58,7 +59,7 @@ impl ListDelegate for PaletteDelegate {
         _: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) -> impl IntoElement {
-        design::empty(cx)
+        design::empty(self.status.clone(), cx)
     }
 }
 pub struct Palette {
@@ -78,6 +79,15 @@ impl Palette {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let status = match &directory {
+            None => Some(crate::design::state::PanelState::Loading(
+                "商品清單載入中".into(),
+            )),
+            Some(Err(reason)) => Some(crate::design::state::PanelState::Failed(
+                format!("商品清單：{reason}").into(),
+            )),
+            Some(Ok(_)) => None,
+        };
         let (items, message) = match directory {
             Some(Ok(items)) => (
                 items,
@@ -96,6 +106,7 @@ impl Palette {
                 matches: vec![],
                 query: String::new(),
                 watching,
+                status,
             };
             delegate.search("");
             ListState::new(delegate, window, cx).searchable(true)
@@ -161,12 +172,21 @@ impl Palette {
                 self.list.update(cx, |list, cx| {
                     let query = list.delegate().query.clone();
                     list.delegate_mut().items = items;
+                    list.delegate_mut().status = None;
                     list.delegate_mut().search(&query);
                     list.set_selected_index(Some(IndexPath::new(0)), window, cx);
                     cx.notify();
                 });
             }
-            Err(e) => self.message = format!("商品清單失敗：{e}"),
+            Err(e) => {
+                self.message = format!("商品清單失敗：{e}");
+                self.list.update(cx, |list, cx| {
+                    list.delegate_mut().status = Some(crate::design::state::PanelState::Failed(
+                        format!("商品清單：{e}").into(),
+                    ));
+                    cx.notify();
+                });
+            }
         };
         cx.notify();
     }

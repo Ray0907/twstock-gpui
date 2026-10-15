@@ -62,7 +62,11 @@ impl TableDelegate for WatchlistDelegate {
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
         let Some(quote) = self.quote(row, cx) else {
-            return parts::panel_header("尚無行情", cx).into_any_element();
+            return crate::design::state::panel(
+                crate::design::state::PanelState::Empty("尚無行情 · 請加入自選商品".into()),
+                cx,
+            )
+            .into_any_element();
         };
         match col {
             0 => {

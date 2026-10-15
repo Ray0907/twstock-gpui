@@ -106,12 +106,25 @@ pub fn position_section(quote: &Quote, cx: &App) -> ObservedElement<Stateful<Div
     } else {
         "今日區間"
     };
-    let recent = format!("近期區間 · {} 根日線", p.recent_count);
+    let recent = if let Some(reason) = &quote.history_error {
+        format!("近期區間 · 載入失敗：{reason}")
+    } else if !quote.history_loaded {
+        "近期區間 · 載入中".into()
+    } else if p.recent_count == 0 {
+        "近期區間 · 無資料".into()
+    } else {
+        format!("近期區間 · {} 根日線", p.recent_count)
+    };
     let percentile = p
         .recent_percentile
         .map_or_else(|| "—".into(), |v| format!("{v:.0}%"));
     let volume = format!(
-        "量比 · {}",
+        "累計量 {} 張 · {}",
+        if quote.volume_known {
+            super::format::volume(quote.volume)
+        } else {
+            "—".into()
+        },
         if p.intraday {
             "盤中累計"
         } else {
@@ -173,16 +186,18 @@ pub fn position_section(quote: &Quote, cx: &App) -> ObservedElement<Stateful<Div
                 .aria_label(recent)
                 .test_support(),
         )
-        .child(
-            h_flex()
-                .justify_between()
-                .child(text::text(
-                    TextRole::Body,
-                    format!("{} — {}", price(p.recent_low), price(p.recent_high)),
-                    cx,
-                ))
-                .child(text::text(TextRole::Body, percentile, cx)),
-        )
+        .when(p.recent_count > 0, |el| {
+            el.child(
+                h_flex()
+                    .justify_between()
+                    .child(text::text(
+                        TextRole::Body,
+                        format!("{} — {}", price(p.recent_low), price(p.recent_high)),
+                        cx,
+                    ))
+                    .child(text::text(TextRole::Body, percentile, cx)),
+            )
+        })
         .child(
             text::text(TextRole::Caption, volume.clone(), cx)
                 .id("position-volume")
@@ -555,7 +570,7 @@ pub fn quote_metrics(quote: &Quote, cx: &App) -> Div {
         (
             "成交量",
             SharedString::from(if quote.volume_known {
-                format!("{} 張", quote.volume)
+                format!("{} 張", super::format::volume(quote.volume))
             } else {
                 "—".into()
             }),
@@ -599,7 +614,7 @@ pub fn quote_metrics(quote: &Quote, cx: &App) -> Div {
 }
 pub fn depth_ratio(share: f32, cx: &App) -> Div {
     if !share.is_finite() {
-        return panel_header("尚無五檔資料", cx);
+        return super::state::panel(super::state::PanelState::Empty("尚無五檔資料".into()), cx);
     }
     v_flex()
         .px(Space::Small.rem())
@@ -656,7 +671,7 @@ fn quantity_bar(volume: Option<u64>, maximum: u64, direction: Direction, cx: &Ap
         .child(
             text::text(
                 TextRole::Body,
-                volume.map_or_else(|| "—".into(), |v| v.to_string()),
+                volume.map_or_else(|| "—".into(), |v| super::format::volume(v as f64)),
                 cx,
             )
             .relative()
@@ -768,9 +783,13 @@ pub fn trade_feed(quote: &Quote, cx: &App) -> ObservedElement<Stateful<Div>> {
                         .text_right(),
                 )
                 .child(
-                    text::text(TextRole::Body, trade.quantity.to_string(), cx)
-                        .w(Dimension::Quantity.rem())
-                        .text_right(),
+                    text::text(
+                        TextRole::Body,
+                        super::format::volume(trade.quantity as f64),
+                        cx,
+                    )
+                    .w(Dimension::Quantity.rem())
+                    .text_right(),
                 )
                 .child(
                     Direction::of(trade.change)

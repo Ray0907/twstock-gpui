@@ -613,6 +613,7 @@ fn render(mode: ThemeMode, width: u32, height: u32, path: &str) -> Vec<u8> {
         );
         assert!((geometry.price_y(geometry.cursor_price(y)) - y).abs() < px(0.02));
         cross.save("/tmp/twstock-gpui-crosshair.png").unwrap();
+        volume::check(&mut cx, handle, plot_bounds, &data, snapshot.last);
     }
     image.into_raw()
 }
@@ -1377,7 +1378,12 @@ fn position_layout_cases() {
         .save("/tmp/twstock-gpui-position-outside.png")
         .unwrap();
 }
+#[path = "support/states.rs"]
+mod states;
+#[path = "support/volume.rs"]
+mod volume;
 fn main() {
+    states::run();
     position_layout_cases();
     palette_rendering();
     palette_workflow();
