@@ -83,7 +83,7 @@ pub fn pane(id: &'static str) -> ObservedElement<Stateful<Div>> {
 }
 pub const TRADES_DEFAULT_OPEN: bool = true;
 pub fn quote_pane() -> ObservedElement<Stateful<Div>> {
-    pane("quote-panel")
+    pane("quote-panel").overflow_y_scroll()
 }
 pub fn quote_summary(quote: &Quote, share: f32, cx: &App) -> Div {
     v_flex()
@@ -92,29 +92,124 @@ pub fn quote_summary(quote: &Quote, share: f32, cx: &App) -> Div {
         .child(quote_metrics(quote, cx))
         .child(depth_ratio(share, cx))
         .child(depth_book(quote, cx))
+        .child(position_section(quote, cx))
+}
+pub fn position_section(quote: &Quote, cx: &App) -> ObservedElement<Stateful<Div>> {
+    let p = &quote.position;
+    let price = |p: Option<crate::market::Price>| {
+        p.map_or_else(|| "—".into(), |p| format_price(p.0 as f64 / 10000.))
+    };
+    let today = if quote.is_reference {
+        "參考價 · 不標現價"
+    } else if !quote.last.is_finite() {
+        "尚無成交價"
+    } else {
+        "今日區間"
+    };
+    let recent = format!("近期區間 · {} 根日線", p.recent_count);
+    let percentile = p
+        .recent_percentile
+        .map_or_else(|| "—".into(), |v| format!("{v:.0}%"));
+    let volume = format!(
+        "量比 · {}",
+        if p.intraday {
+            "盤中累計"
+        } else {
+            "全日累計"
+        }
+    );
+    v_flex()
+        .id("position-section")
+        .test_support()
+        .p(Space::Small.rem())
+        .gap(Space::Micro.rem())
+        .border_b_1()
+        .border_color(color::get(ColorRole::Border, cx))
+        .child(
+            h_flex()
+                .justify_between()
+                .child(panel_header("位置", cx))
+                .child(
+                    panel_header(today, cx)
+                        .id("position-today")
+                        .aria_label(today)
+                        .test_support(),
+                ),
+        )
+        .child(
+            div()
+                .id("position-plot")
+                .test_support()
+                .h(rems(3.))
+                .child(super::position::PositionPlot::new(quote)),
+        )
+        .child(
+            h_flex()
+                .justify_between()
+                .child(
+                    text::text(
+                        TextRole::Caption,
+                        format!("跌停 {}", format_price(quote.limit_down)),
+                        cx,
+                    )
+                    .id("position-limit-down")
+                    .aria_label(format!("跌停 {}", format_price(quote.limit_down)))
+                    .test_support(),
+                )
+                .child(
+                    text::text(
+                        TextRole::Caption,
+                        format!("漲停 {}", format_price(quote.limit_up)),
+                        cx,
+                    )
+                    .id("position-limit-up")
+                    .aria_label(format!("漲停 {}", format_price(quote.limit_up)))
+                    .test_support(),
+                ),
+        )
+        .child(
+            text::text(TextRole::Caption, recent.clone(), cx)
+                .id("position-recent")
+                .aria_label(recent)
+                .test_support(),
+        )
+        .child(
+            h_flex()
+                .justify_between()
+                .child(text::text(
+                    TextRole::Body,
+                    format!("{} — {}", price(p.recent_low), price(p.recent_high)),
+                    cx,
+                ))
+                .child(text::text(TextRole::Body, percentile, cx)),
+        )
+        .child(
+            text::text(TextRole::Caption, volume.clone(), cx)
+                .id("position-volume")
+                .aria_label(volume)
+                .test_support(),
+        )
+        .child(
+            h_flex()
+                .justify_between()
+                .child(text::text(TextRole::Caption, "累計量 / 前 5 日均日量", cx))
+                .child(text::text(
+                    TextRole::Body,
+                    p.volume_ratio
+                        .map_or_else(|| "—".into(), |v| format!("{v:.2}×")),
+                    cx,
+                )),
+        )
 }
 pub type RemoveHandler = std::rc::Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
-pub fn watch_heading(handler: RemoveHandler, cx: &App) -> Div {
-    use gpui_kit::component::{
-        button::Button,
-        menu::{DropdownMenu, PopupMenuItem},
-    };
-    h_flex()
-        .gap(Space::Small.rem())
-        .items_center()
-        .child(panel_header("自選", cx))
-        .child(
-            Button::new("watchlist-actions")
-                .label("…")
-                .small()
-                .dropdown_menu(move |menu, _, _| {
-                    let handler = handler.clone();
-                    menu.item(
-                        PopupMenuItem::new("移除選取（Delete / Backspace）")
-                            .on_click(move |e, w, cx| handler(e, w, cx)),
-                    )
-                }),
-        )
+pub fn watch_menu(
+    menu: gpui_kit::component::menu::PopupMenu,
+    handler: RemoveHandler,
+) -> gpui_kit::component::menu::PopupMenu {
+    menu.item(
+        gpui_kit::component::menu::PopupMenuItem::new("移除選取（Delete / Backspace）")
+            .on_click(move |e, w, cx| handler(e, w, cx)),
+    )
 }
 pub fn watch_columns(cx: &App) -> Vec<Column> {
     let widths = space::watch_widths(Dimension::Watchlist.rem().to_pixels(cx.theme().font_size));
@@ -641,7 +736,7 @@ pub fn trade_feed(quote: &Quote, cx: &App) -> ObservedElement<Stateful<Div>> {
         .id("trade-feed")
         .test_support()
         .flex_1()
-        .min_h_0()
+        .min_h(Dimension::DataRow.rem())
         .overflow_y_scroll()
         .px(Space::Small.rem())
         .pb(Space::Small.rem())

@@ -3,6 +3,7 @@ pub mod color;
 pub mod direction;
 pub mod palette;
 pub mod parts;
+pub mod position;
 pub mod shape;
 pub mod space;
 pub mod text;

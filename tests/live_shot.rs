@@ -177,6 +177,24 @@ fn capture(store: MarketStore, mode: ThemeMode, path: &str) {
             window.try_find("trade-feed").is_none(),
             "MIS must not show mock trades"
         );
+        assert!(window.try_find("trades-toggle").is_none());
+        let position = window.find("position-section").bounds();
+        let pane = window.find("quote-panel").bounds();
+        assert!(position.size.height > px(0.) && position.bottom() <= pane.bottom());
+        assert!(
+            window
+                .find("position-recent")
+                .label()
+                .unwrap()
+                .contains("根")
+        );
+        assert!(
+            window
+                .find("position-volume")
+                .label()
+                .unwrap()
+                .contains("累計")
+        );
     })
     .unwrap();
     cx.run_until_parked();

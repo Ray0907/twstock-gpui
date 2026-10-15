@@ -7,6 +7,8 @@ mod mock;
 mod model;
 mod period;
 pub use period::*;
+mod position;
+pub use position::*;
 mod store;
 mod ticks;
 pub use config::*;

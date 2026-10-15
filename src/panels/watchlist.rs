@@ -134,12 +134,20 @@ impl BasePanel for WatchlistPanel {
 }
 impl Panel for WatchlistPanel {
     fn title(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        parts::panel_header("自選", cx)
+    }
+    fn dropdown_menu(
+        &mut self,
+        menu: gpui_kit::component::menu::PopupMenu,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::component::menu::PopupMenu {
         let entity = cx.entity().downgrade();
-        parts::watch_heading(
+        parts::watch_menu(
+            menu,
             std::rc::Rc::new(move |_, _, cx| {
                 let _ = entity.update(cx, |_, cx| cx.emit(RemoveSelected));
             }),
-            cx,
         )
     }
     fn tab_name(&self, _: &App) -> Option<SharedString> {

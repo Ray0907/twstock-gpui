@@ -6,7 +6,7 @@ use super::{
     text::{self, TextRole},
 };
 use crate::{
-    market::{Candle, ChartSeries, NiceTicks, Price, Timeframe, nice_ticks},
+    market::{Candle, ChartSeries, NiceTicks, Price, Timeframe, nice_ticks, volume_clip_limit},
     quotes::format_price,
 };
 use gpui_kit::component::{
@@ -63,6 +63,7 @@ pub struct ChartGeometry {
     pub domain: [f64; 2],
     pub price_ticks: NiceTicks,
     pub volume_ticks: NiceTicks,
+    pub volume_clip: Option<u64>,
 }
 impl ChartGeometry {
     pub fn new(
@@ -95,7 +96,9 @@ impl ChartGeometry {
             .max()
             .unwrap_or(1)
             .max(1) as i128;
-        let volume_ticks = nice_ticks(0, max_volume, 3);
+        let volumes: Vec<_> = data.candles.iter().map(|c| c.volume).collect();
+        let volume_clip = volume_clip_limit(&volumes);
+        let volume_ticks = nice_ticks(0, volume_clip.map_or(max_volume, i128::from), 3);
         let price = ScaleLinear::new(
             domain,
             [layout.price.bottom().as_f32(), layout.price.top().as_f32()],
@@ -121,7 +124,23 @@ impl ChartGeometry {
             domain,
             price_ticks,
             volume_ticks,
+            volume_clip,
         }
+    }
+    pub fn clipped_volume(&self, volume: u64) -> Option<u64> {
+        self.volume_clip
+            .filter(|limit| volume > *limit)
+            .map(|_| volume)
+    }
+    pub fn volume_bar(&self, index: usize, volume: u64) -> Bounds<Pixels> {
+        let volume = self.volume_clip.map_or(volume, |limit| volume.min(limit));
+        let y = self.volume.tick(&(volume as f64)).unwrap();
+        let x = self.x.tick(&index).unwrap_or(0.) + self.x.band_width() / 2.;
+        let width = self.x.band_width() * 0.85;
+        Bounds::new(
+            point(px(x - width / 2.), px(y)),
+            size(px(width), self.layout.volume.bottom() - px(y)),
+        )
     }
     pub fn axis_label_bounds(&self, y: Pixels) -> Bounds<Pixels> {
         Bounds::new(
@@ -250,7 +269,12 @@ fn exact_volume(shares: u64, lot: u64) -> String {
             .to_string()
     }
 }
-fn line(points: Vec<Point<f32>>, stroke: Hsla, bounds: &Bounds<Pixels>, window: &mut Window) {
+pub(super) fn line(
+    points: Vec<Point<f32>>,
+    stroke: Hsla,
+    bounds: &Bounds<Pixels>,
+    window: &mut Window,
+) {
     Line::new()
         .data(points)
         .x(|p: &Point<f32>| Some(p.x))
@@ -260,7 +284,7 @@ fn line(points: Vec<Point<f32>>, stroke: Hsla, bounds: &Bounds<Pixels>, window: 
         .stroke_width(px(0.8))
         .paint(bounds, window);
 }
-fn bar(
+pub(super) fn bar(
     frame: Bounds<Pixels>,
     fill: Hsla,
     bounds: &Bounds<Pixels>,
@@ -276,7 +300,7 @@ fn bar(
         .fill(move |_, _, _| fill)
         .paint(bounds, window, cx);
 }
-fn label(
+pub(super) fn label(
     value: impl Into<SharedString>,
     position: Point<Pixels>,
     color: Hsla,
@@ -441,12 +465,37 @@ impl Plot for TradingPlot {
                     window,
                 ),
             }
-            let top = px(g.volume.tick(&(candle.volume as f64)).unwrap());
-            let frame = Bounds::new(
-                point(c.body.left(), top),
-                size(c.body.size.width, g.layout.volume.bottom() - top),
-            );
+            let frame = g.volume_bar(index, candle.volume);
             bar(frame, stroke.opacity(0.55), &bounds, window, cx);
+            if let Some(actual) = g.clipped_volume(candle.volume) {
+                // Contrasting slashes explicitly break the capped bar's top.
+                for x in [c.x - 3., c.x + 1.] {
+                    Line::new()
+                        .data(vec![
+                            point(x - 1., frame.top().as_f32() + 5.),
+                            point(x + 2., frame.top().as_f32() - 1.),
+                        ])
+                        .x(|p: &Point<f32>| Some(p.x))
+                        .y(|p| Some(p.y))
+                        .stroke(foreground)
+                        .stroke_width(px(2.))
+                        .paint(&bounds, window);
+                }
+                let value: SharedString = volume_text(actual as f64, self.data.lot_size).into();
+                let width = px(measure_text_width(&value, font, window));
+                label(
+                    value,
+                    point(
+                        (frame.right() + px(3.)).min((g.layout.volume.right() - width).max(px(0.))),
+                        frame.top() + px(3.),
+                    ),
+                    foreground,
+                    font,
+                    &bounds,
+                    window,
+                    cx,
+                );
+            }
         }
         for (index, average) in self.data.averages.iter().enumerate() {
             let points = average
@@ -611,7 +660,7 @@ impl Plot for TradingPlot {
             x += px(width) + Space::Medium.rem().to_pixels(cx.theme().font_size);
         }
         label(
-            "量（張）",
+            volume_title(g.volume_clip, self.data.lot_size),
             point(px(0.), g.layout.volume.top() - font - px(1.)),
             muted,
             font,
@@ -667,7 +716,17 @@ impl Plot for TradingPlot {
         }
     }
 }
+pub fn volume_title(limit: Option<u64>, lot: u64) -> String {
+    limit.map_or_else(
+        || "量（張）".into(),
+        |v| format!("量（張） · 截斷於 {}", exact_volume(v, lot)),
+    )
+}
 pub fn view(data: ChartSeries, current: Option<Price>, period: Timeframe, cx: &App) -> Div {
+    let clip = volume_clip_limit(&data.candles.iter().map(|c| c.volume).collect::<Vec<_>>());
+    let clip_title = clip.map_or(String::new(), |v| {
+        format!(" · {}", volume_title(Some(v), data.lot_size))
+    });
     gpui_kit::component::v_flex()
         .flex_1()
         .min_h_0()
@@ -677,13 +736,14 @@ pub fn view(data: ChartSeries, current: Option<Price>, period: Timeframe, cx: &A
             text::frame(TextRole::Caption, cx)
                 .id("candle-region")
                 .aria_label(format!(
-                    "{}線 · {} 根",
+                    "{}線 · {} 根{}",
                     match period {
                         Timeframe::Day => "日",
                         Timeframe::Week => "週",
                         Timeframe::Month => "月",
                     },
-                    data.candles.len()
+                    data.candles.len(),
+                    clip_title
                 ))
                 .test_support()
                 .flex_1()
@@ -698,6 +758,34 @@ pub fn view(data: ChartSeries, current: Option<Price>, period: Timeframe, cx: &A
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn volume_abbreviations_match_axis_and_clipped_labels() {
+        for (lots, expected) in [
+            (999, "999"),
+            (1000, "1k"),
+            (1500, "1.5k"),
+            (600000, "600k"),
+            (1200000, "1.2M"),
+        ] {
+            assert_eq!(super::volume_text((lots * 1000) as f64, 1000), expected);
+        }
+        let source = include_str!("chart.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        let clipped = source
+            .split("if let Some(actual) = g.clipped_volume(candle.volume) {")
+            .nth(1)
+            .unwrap()
+            .split("for (index, average)")
+            .next()
+            .unwrap();
+        assert!(
+            clipped.contains("volume_text(actual as f64, self.data.lot_size)"),
+            "clipped labels must use the existing axis formatter, not a copy or the exact hover formatter"
+        );
+        assert!(source.contains("volume_text(*v as f64, self.data.lot_size)"));
+    }
     #[test]
     fn axes_format_nice_prices_and_scaled_quantities() {
         assert_eq!(super::price_tick(1_000_000, 50_000), "100");

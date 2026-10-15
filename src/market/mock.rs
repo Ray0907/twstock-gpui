@@ -142,6 +142,8 @@ impl MockProvider {
                 price = open;
             }
             candles.reverse();
+            // A fictional one-day spike exercises the robust volume scale in screenshots.
+            candles[50].volume = 600_000_000;
             result.histories.push((symbol.clone(), candles));
             for trade in (0..12).rev() {
                 result.events.push(MarketEvent::Trade(Trade {

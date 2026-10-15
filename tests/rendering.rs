@@ -146,6 +146,31 @@ fn render(mode: ThemeMode, width: u32, height: u32, path: &str) -> Vec<u8> {
                 );
             }
             assert!(window.try_find("limits-section").is_none());
+            let position = window.find("position-section").bounds();
+            assert!(position.size.height > px(0.));
+            assert!(position.bottom() <= window.find("quote-panel").bounds().bottom());
+            assert!(
+                window
+                    .find("position-recent")
+                    .label()
+                    .unwrap()
+                    .contains("根")
+            );
+            assert!(
+                window
+                    .find("position-volume")
+                    .label()
+                    .unwrap()
+                    .contains("累計")
+            );
+            assert!(
+                window
+                    .find("candle-region")
+                    .label()
+                    .unwrap()
+                    .contains("截斷於")
+            );
+            assert!(window.try_find("watchlist-actions").is_none());
             assert!(
                 window.try_find("trade-feed").is_some(),
                 "trades start expanded"
@@ -279,7 +304,10 @@ fn render(mode: ThemeMode, width: u32, height: u32, path: &str) -> Vec<u8> {
             }
             for ix in 0_usize..3 {
                 bounds.push(window.find(("index-last", ix)).bounds());
-                bounds.push(window.find(("trade-price", ix)).bounds());
+                let trade = window.find(("trade-price", ix)).bounds();
+                if trade.bottom() <= window.find("trade-feed").bounds().bottom() {
+                    bounds.push(trade);
+                }
             }
             (
                 bounds,
@@ -347,6 +375,10 @@ fn render(mode: ThemeMode, width: u32, height: u32, path: &str) -> Vec<u8> {
     let image = cx
         .capture_screenshot(handle)
         .expect("real offscreen renderer must be available");
+    if width == 1080 && mode == ThemeMode::Dark {
+        image.save("/tmp/twstock-gpui-position.png").unwrap();
+        image.save("/tmp/twstock-gpui-volume-clip.png").unwrap();
+    }
     let pixels = |bounds: Bounds<gpui_kit::Pixels>| {
         let image = &image;
         let left = (bounds.left().as_f32() * scale).ceil() as u32;
@@ -378,6 +410,27 @@ fn render(mode: ThemeMode, width: u32, height: u32, path: &str) -> Vec<u8> {
     let data = store.chart_series(symbol).unwrap();
     let geometry =
         twstock_gpui::design::chart::ChartGeometry::new(plot_bounds, px(13.), &data, snapshot.last);
+    let spike = data
+        .candles
+        .iter()
+        .position(|c| c.volume == 600_000_000)
+        .unwrap();
+    let cap_bar = geometry.volume_bar(spike, data.candles[spike].volume);
+    let marker = Bounds::new(
+        plot_bounds.origin
+            + point(
+                px(geometry.candle(spike, &data.candles[spike]).x - 3.),
+                cap_bar.top(),
+            ),
+        size(px(6.), px(5.)),
+    );
+    assert!(
+        pixels(marker)
+            .filter(|(_, pixel)| *pixel == foreground)
+            .count()
+            >= 2,
+        "capped spike needs an explicit contrasting break marker"
+    );
     let line_y = plot_bounds.top().as_f32() + geometry.price_y(snapshot.last.unwrap()).as_f32();
     let band = Bounds {
         origin: point(plot_bounds.left(), px(line_y - 1.5)),
@@ -653,7 +706,7 @@ fn watchlist_edge_cases(count: usize) {
     })
     .unwrap();
 }
-fn reference_price_rendering(mode: ThemeMode) {
+fn reference_price_rendering(mode: ThemeMode, height: f32) {
     use twstock_gpui::market::*;
     let mock = MockProvider::new().store();
     let symbol = mock.order[0].clone();
@@ -696,7 +749,7 @@ fn reference_price_rendering(mode: ThemeMode) {
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                         Default::default(),
-                        size(px(1080.), px(720.)),
+                        size(px(1080.), px(height)),
                     ))),
                     focus: false,
                     show: false,
@@ -738,6 +791,18 @@ fn reference_price_rendering(mode: ThemeMode) {
             )
         })
         .unwrap();
+    cx.update_window(handle, |_, window, _| {
+        assert!(window.try_find("trade-feed").is_none());
+        assert!(window.try_find("trades-toggle").is_none());
+        assert!(
+            window
+                .find("position-today")
+                .label()
+                .unwrap()
+                .contains("不標現價")
+        );
+    })
+    .unwrap();
     let image = cx.capture_screenshot(handle).unwrap();
     let scale = image.width() as f32 / 1080.;
     for region in regions {
@@ -767,6 +832,22 @@ fn reference_price_rendering(mode: ThemeMode) {
             "/tmp/twstock-gpui-reference-light.png"
         })
         .unwrap();
+    if height < 600. {
+        cx.update_window(handle, |_, window, cx| {
+            window.scroll(
+                "quote-panel",
+                gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-300.))),
+                cx,
+            );
+            window.render_frame(cx);
+            assert!(
+                window.find("position-section").bounds().bottom()
+                    <= window.find("quote-panel").bounds().bottom(),
+                "position remains reachable at the minimum window height"
+            );
+        })
+        .unwrap();
+    }
 }
 fn period_rendering() {
     let mut cx = HeadlessAppContext::with_platform(
@@ -1129,7 +1210,7 @@ fn palette_workflow() {
             }
             cx.update_window(handle, |_, w, cx| {
                 w.click(("row", 0usize), cx);
-                w.click("watchlist-actions", cx);
+                w.within(("resizable-panel", 0usize)).click("menu", cx);
                 assert!(w.find("popup-menu").visible());
                 w.press("down", cx);
                 w.press("enter", cx);
@@ -1145,12 +1226,165 @@ fn palette_workflow() {
         }
     }
 }
+fn position_layout_cases() {
+    use twstock_gpui::{design::position::PositionLayout, market::*};
+    let mut store = MockProvider::new().store();
+    let symbol = store.order[0].clone();
+    store.instruments.get_mut(&symbol).unwrap().tick_rule = TickRule::Etf;
+    let at = store.snapshot(&symbol).unwrap().as_of.unwrap() + 1;
+    let history = store.histories.get_mut(&symbol).unwrap();
+    let offset = 865000 - history.last().unwrap().close.0;
+    for c in history {
+        for p in [&mut c.open, &mut c.high, &mut c.low, &mut c.close] {
+            *p = TickRule::Etf.round(Price(p.0 + offset));
+        }
+    }
+    store.apply(
+        MarketEvent::Quote(QuoteUpdate {
+            symbol,
+            as_of: Some(at),
+            last: Some(Price(827000)),
+            low: Some(Price(823500)),
+            high: Some(Price(836500)),
+            open: Some(Price(836500)),
+            prev_close: Some(Price(865000)),
+            limit_down: Some(Price(779000)),
+            limit_up: Some(Price(951000)),
+            ..Default::default()
+        }),
+        at,
+    );
+    let mut cx = HeadlessAppContext::with_platform(
+        gpui_kit::platform::current_platform(true).text_system(),
+        Arc::new(Assets),
+        gpui_kit::platform::current_headless_renderer,
+    );
+    cx.update(gpui_kit::init);
+    let (handle, _) = cx
+        .update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        Default::default(),
+                        size(px(1080.), px(720.)),
+                    ))),
+                    focus: false,
+                    show: false,
+                    ..TitleBar::window_options()
+                },
+                cx,
+                |window, cx| {
+                    twstock_gpui::theme::apply(ThemeMode::Dark, Some(window), cx);
+                    cx.new(|cx| Workspace::with_store(store, window, cx))
+                },
+            )
+        })
+        .unwrap();
+    for _ in 0..3 {
+        cx.update_window(handle, |_, w, cx| w.render_frame(cx))
+            .unwrap();
+        cx.run_until_parked();
+    }
+    cx.update_window(handle, |_, w, cx| {
+        let plot_bounds = w.find("position-plot").bounds();
+        assert!(
+            w.find("position-limit-down")
+                .label()
+                .unwrap()
+                .starts_with("跌停 ")
+        );
+        assert!(
+            w.find("position-limit-up")
+                .label()
+                .unwrap()
+                .starts_with("漲停 ")
+        );
+        for (low, high, prev, last, open, reference) in [
+            (82.35, 83.65, 86.50, 82.70, 83.65, false), // previous close outside today's high/low
+            (84., 84., 84., 84., 84., false),           // flat, all labels coincide
+            (82.35, 83.65, 83., 82.70, 82.35, false),   // open at low
+            (82.35, 83.65, 83., 82.70, 83.65, false),   // open at high
+            (82.35, 83.65, 82.70, 82.70, 83., false),   // current at previous close
+            (82.35, 83.65, 86.50, 1000., 83.65, true),  // reference must not affect domain
+            (82.35, 82.45, 103.50, 82.40, 82.35, false), // very close labels
+        ] {
+            let mut markers = vec![("低", low), ("高", high), ("昨收", prev), ("開", open)];
+            if !reference {
+                markers.push(("現", last));
+            }
+            for rule in [TickRule::Etf, TickRule::Stock] {
+                for width in [120., plot_bounds.size.width.as_f32(), 260.] {
+                    let frame = size(px(width), plot_bounds.size.height);
+                    let layout =
+                        PositionLayout::new(&markers, rule, frame, cx.theme().font_size, w)
+                            .unwrap();
+                    let mut prices = vec![low, high, prev, open];
+                    if !reference {
+                        prices.push(last);
+                    }
+                    let min = prices.iter().copied().fold(f64::INFINITY, f64::min);
+                    let max = prices.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                    let tick = [min, max]
+                        .map(|v| rule.tick(Price((v * 10000.).round() as i64)).0)
+                        .into_iter()
+                        .max()
+                        .unwrap() as f64
+                        / 10000.;
+                    let pad = ((max - min) * 0.08).max(tick);
+                    assert!((layout.domain[0] - (min - pad)).abs() < 1e-9);
+                    assert!((layout.domain[1] - (max + pad)).abs() < 1e-9);
+                    assert_eq!(layout.labels.iter().any(|l| l.name == "現"), !reference);
+                    for (i, label) in layout.labels.iter().enumerate() {
+                        let b = label.bounds;
+                        assert!(
+                            b.left() >= px(0.)
+                                && b.right() <= frame.width
+                                && b.top() >= px(0.)
+                                && b.bottom() <= frame.height,
+                            "{} outside frame {frame:?}: {b:?}",
+                            label.name
+                        );
+                        for other in &layout.labels[i + 1..] {
+                            assert!(
+                                b.right() <= other.bounds.left()
+                                    || other.bounds.right() <= b.left()
+                                    || b.bottom() <= other.bounds.top()
+                                    || other.bounds.bottom() <= b.top(),
+                                "{} overlaps {}: {b:?}, {:?}",
+                                label.name,
+                                other.name,
+                                other.bounds
+                            );
+                        }
+                        let expected_x = layout.axis.left().as_f32()
+                            + ((label.value - layout.domain[0])
+                                / (layout.domain[1] - layout.domain[0]))
+                                as f32
+                                * layout.axis.size.width.as_f32();
+                        assert!(
+                            (label.x.as_f32() - expected_x).abs() < 0.001,
+                            "{} must share the axis scale",
+                            label.name
+                        );
+                    }
+                }
+            }
+        }
+    })
+    .unwrap();
+    cx.capture_screenshot(handle)
+        .unwrap()
+        .save("/tmp/twstock-gpui-position-outside.png")
+        .unwrap();
+}
 fn main() {
+    position_layout_cases();
     palette_rendering();
     palette_workflow();
     period_rendering();
-    reference_price_rendering(ThemeMode::Dark);
-    reference_price_rendering(ThemeMode::Light);
+    reference_price_rendering(ThemeMode::Dark, 488.);
+    reference_price_rendering(ThemeMode::Dark, 720.);
+    reference_price_rendering(ThemeMode::Light, 720.);
     for count in [1, 3] {
         watchlist_edge_cases(count);
     }
