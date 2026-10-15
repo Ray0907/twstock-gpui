@@ -1403,7 +1403,10 @@ mod snapshot;
 mod states;
 #[path = "support/volume.rs"]
 mod volume;
+#[path = "support/zoom.rs"]
+mod zoom;
 fn main() {
+    zoom::run();
     states::run();
     position_layout_cases();
     palette_rendering();

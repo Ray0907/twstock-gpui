@@ -1,5 +1,7 @@
 //! One plot owns both subplots, all projections and native hover tracking.
+mod interaction;
 mod labels;
+pub mod range;
 use super::{
     color::{self, ColorRole},
     direction::{CandleBody, Direction},
@@ -20,7 +22,10 @@ use gpui_kit::component::{
     },
 };
 use gpui_kit::*;
+pub use interaction::ChartViewport;
 pub use labels::{ChartLabel, ChartLabels};
+use range::VisibleRange;
+use std::rc::Rc;
 
 pub struct ChartLayout {
     pub price: Bounds<Pixels>,
@@ -74,16 +79,33 @@ impl ChartGeometry {
         data: &ChartSeries,
         current: Option<Price>,
     ) -> Self {
+        Self::for_range(
+            bounds,
+            font,
+            data,
+            current,
+            VisibleRange::reset(data.candles.len()),
+        )
+    }
+    pub fn for_range(
+        bounds: Bounds<Pixels>,
+        font: Pixels,
+        data: &ChartSeries,
+        current: Option<Price>,
+        range: VisibleRange,
+    ) -> Self {
+        let range = range.clamp(data.candles.len());
+        let candles = &data.candles[range.start..range.start + range.count];
+        // A quote outside the viewport must not expand the visible price scale.
+        let current = current.filter(|_| range.count == data.candles.len());
         let layout = ChartLayout::new(bounds, font);
-        let low = data
-            .candles
+        let low = candles
             .iter()
             .map(|c| c.low.0)
             .chain(current.map(|p| p.0))
             .min()
             .unwrap_or(0) as i128;
-        let high = data
-            .candles
+        let high = candles
             .iter()
             .map(|c| c.high.0)
             .chain(current.map(|p| p.0))
@@ -91,14 +113,8 @@ impl ChartGeometry {
             .unwrap_or(10000) as i128;
         let price_ticks = nice_ticks(low, high, 5);
         let domain = [price_ticks.min as f64, price_ticks.max as f64];
-        let max_volume = data
-            .candles
-            .iter()
-            .map(|c| c.volume)
-            .max()
-            .unwrap_or(1)
-            .max(1) as i128;
-        let volumes: Vec<_> = data.candles.iter().map(|c| c.volume).collect();
+        let max_volume = candles.iter().map(|c| c.volume).max().unwrap_or(1).max(1) as i128;
+        let volumes: Vec<_> = candles.iter().map(|c| c.volume).collect();
         let volume_clip = volume_clip_limit(&volumes);
         let volume_ticks = nice_ticks(0, volume_clip.map_or(max_volume, i128::from), 3);
         let price = ScaleLinear::new(
@@ -112,12 +128,7 @@ impl ChartGeometry {
                 layout.volume.top().as_f32(),
             ],
         );
-        let x = ScaleBand::new(
-            0..data.candles.len(),
-            [0., layout.price.size.width.as_f32()],
-        )
-        .padding_inner(0.15)
-        .padding_outer(0.5);
+        let x = Self::candle_scale(candles.len(), layout.price.size.width.as_f32());
         Self {
             layout,
             x,
@@ -128,6 +139,34 @@ impl ChartGeometry {
             volume_ticks,
             volume_clip,
         }
+    }
+    fn candle_scale(count: usize, width: f32) -> ScaleBand<usize> {
+        ScaleBand::new(0..count, [0., width])
+            .padding_inner(0.15)
+            .padding_outer(0.5)
+    }
+    fn anchor_zoom(
+        old: VisibleRange,
+        next: VisibleRange,
+        total: usize,
+        cursor: f64,
+        width: f64,
+    ) -> VisibleRange {
+        let previous = Self::candle_scale(old.count, width as f32);
+        let first = (previous.tick(&0).unwrap_or(0.) + previous.band_width() / 2.) as f64;
+        let step = previous.step() as f64;
+        let x = Self::candle_scale(next.count, width as f32);
+        let next_first = (x.tick(&0).unwrap_or(0.) + x.band_width() / 2.) as f64;
+        let start =
+            old.start as f64 + (cursor - first) / step - (cursor - next_first) / x.step() as f64;
+        let anchor = old.start + previous.nearest_index(cursor as f32 - previous.band_width() / 2.);
+        VisibleRange {
+            start: (start.round().max(0.) as usize)
+                .min(anchor)
+                .max(anchor.saturating_sub(next.count - 1)),
+            count: next.count,
+        }
+        .clamp(total)
     }
     pub fn clipped_volume(&self, volume: u64) -> Option<u64> {
         self.volume_clip
@@ -204,19 +243,34 @@ impl ChartGeometry {
     }
 }
 pub struct TradingPlot {
-    data: ChartSeries,
+    data: Rc<ChartSeries>,
     current: Option<Price>,
     hover: Option<TooltipState>,
     period: Timeframe,
+    viewport: Rc<ChartViewport>,
+    hitbox: Option<Hitbox>,
 }
 impl TradingPlot {
     pub fn new(data: ChartSeries, current: Option<Price>) -> Self {
+        let viewport = Rc::new(ChartViewport::new(data.candles.len()));
+        Self::with_viewport(Rc::new(data), current, viewport)
+    }
+    pub fn with_viewport(
+        data: Rc<ChartSeries>,
+        current: Option<Price>,
+        viewport: Rc<ChartViewport>,
+    ) -> Self {
         Self {
             data,
             current,
             hover: None,
             period: Timeframe::Day,
+            viewport,
+            hitbox: None,
         }
+    }
+    fn range(&self) -> VisibleRange {
+        self.viewport.range.get().clamp(self.data.candles.len())
     }
 }
 pub fn date_text(date: chrono::NaiveDate, period: Timeframe) -> String {
@@ -337,6 +391,15 @@ fn has_space(bounds: Bounds<Pixels>, font: Pixels) -> bool {
         && bounds.size.height > font * 8.
 }
 impl Plot for TradingPlot {
+    fn prepaint(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        window: &mut Window,
+        _: &mut App,
+    ) -> Vec<AnyElement> {
+        self.hitbox = Some(window.insert_hitbox(bounds, HitboxBehavior::Normal));
+        vec![]
+    }
     fn id(&self) -> Option<ElementId> {
         Some("daily-market-plot".into())
     }
@@ -349,21 +412,32 @@ impl Plot for TradingPlot {
         if self.data.candles.is_empty() || !has_space(bounds, cx.theme().font_size) {
             return None;
         }
-        let g = ChartGeometry::new(bounds, cx.theme().font_size, &self.data, self.current);
+        let range = self.range();
+        let g = ChartGeometry::for_range(
+            bounds,
+            cx.theme().font_size,
+            &self.data,
+            self.current,
+            range,
+        );
         if !g.layout.price.contains(&position) && !g.layout.volume.contains(&position) {
             return None;
         }
         let index =
             g.x.nearest_index(position.x.as_f32() - g.x.band_width() / 2.)
-                .min(self.data.candles.len() - 1);
-        let candle = &self.data.candles[index];
+                .min(range.count - 1);
+        let candle = &self.data.candles[range.start + index];
         let x = g.candle(index, candle).x;
         let y = if g.layout.price.contains(&position) {
             position.y
         } else {
             g.price_y(candle.close)
         };
-        Some(TooltipState::new(index, point(px(x), y), vec![]))
+        Some(TooltipState::new(
+            range.start + index,
+            point(px(x), y),
+            vec![],
+        ))
     }
     fn hover(&mut self, hover: Option<&PlotHover>, _: &mut Window, _: &mut App) {
         self.hover = hover.filter(|h| h.is_hovered()).map(|h| h.state().clone());
@@ -375,7 +449,19 @@ impl Plot for TradingPlot {
         if !has_space(bounds, cx.theme().font_size) {
             return;
         }
-        let g = ChartGeometry::new(bounds, cx.theme().font_size, &self.data, self.current);
+        let range = self.range();
+        let candles = &self.data.candles[range.start..range.start + range.count];
+        let g = ChartGeometry::for_range(
+            bounds,
+            cx.theme().font_size,
+            &self.data,
+            self.current,
+            range,
+        );
+        if let Some(hitbox) = &self.hitbox {
+            self.viewport
+                .mount(bounds, &g, self.data.candles.len(), hitbox, window);
+        }
         let font = g.layout.caption;
         let foreground = color::get(ColorRole::Foreground, cx);
         let muted = color::get(ColorRole::Muted, cx);
@@ -390,14 +476,17 @@ impl Plot for TradingPlot {
             .stroke(color::get(ColorRole::Border, cx))
             .dash_array(&[px(3.), px(3.)])
             .paint(&price_bounds, window);
-        if let Some(current) = self.current {
+        if let Some(current) = self
+            .current
+            .filter(|p| (g.domain[0]..=g.domain[1]).contains(&(p.0 as f64)))
+        {
             Grid::new()
                 .y([g.price_y(current) - g.layout.price.top()])
                 .stroke(color::get(ColorRole::LastPriceLine, cx))
                 .dash_array(&[px(4.), px(3.)])
                 .paint(&price_bounds, window);
         }
-        for (index, candle) in self.data.candles.iter().enumerate() {
+        for (index, candle) in candles.iter().enumerate() {
             let c = g.candle(index, candle);
             let direction = Direction::of((candle.close.0 - candle.open.0) as f64);
             let stroke = direction.color(cx);
@@ -477,34 +566,38 @@ impl Plot for TradingPlot {
             }
         }
         for (index, average) in self.data.averages.iter().enumerate() {
-            let points = average
+            let points = average[range.start..range.start + range.count]
                 .iter()
                 .enumerate()
                 .filter_map(|(ix, value)| {
-                    value.map(|v| {
-                        point(
-                            g.candle(ix, &self.data.candles[ix]).x,
-                            g.price_y(v).as_f32(),
-                        )
-                    })
+                    value.map(|v| point(g.candle(ix, &candles[ix]).x, g.price_y(v).as_f32()))
                 })
                 .collect::<Vec<_>>();
-            Line::new()
-                .data(points)
-                .x(|p: &Point<f32>| Some(p.x))
-                .y(|p| Some(p.y))
-                .curve(Curve::Linear)
-                .stroke(rgb(color::series_hex(index, cx.theme().mode.is_dark())))
-                .stroke_width(px(1.25))
-                .paint(&bounds, window);
+            // Earlier offscreen candles can put an MA outside the visible price domain.
+            window.with_content_mask(
+                Some(ContentMask {
+                    bounds: price_bounds,
+                }),
+                |window| {
+                    Line::new()
+                        .data(points)
+                        .x(|p: &Point<f32>| Some(p.x))
+                        .y(|p| Some(p.y))
+                        .curve(Curve::Linear)
+                        .stroke(rgb(color::series_hex(index, cx.theme().mode.is_dark())))
+                        .stroke_width(px(1.25))
+                        .paint(&bounds, window);
+                },
+            );
         }
-        let labels = ChartLabels::new(
+        let labels = ChartLabels::for_range(
             &g,
             &self.data,
             self.current,
             self.hover.as_ref(),
             self.period,
             window,
+            range,
         );
         for tick in labels.price_ticks.iter().chain(&labels.volume_ticks) {
             label(
@@ -528,21 +621,17 @@ impl Plot for TradingPlot {
                 cx,
             );
         }
-        let last = self.data.candles.len() - 1;
+        let last = range.start + range.count - 1;
         Grid::new()
             .y([g.layout.volume.size.height])
             .stroke(color::get(ColorRole::Border, cx))
             .paint(&volume_bounds, window);
-        let highest = self
-            .data
-            .candles
+        let highest = candles
             .iter()
             .enumerate()
             .max_by_key(|(_, c)| c.high)
             .unwrap();
-        let lowest = self
-            .data
-            .candles
+        let lowest = candles
             .iter()
             .enumerate()
             .min_by_key(|(_, c)| c.low)
@@ -571,7 +660,10 @@ impl Plot for TradingPlot {
                 cx,
             );
         }
-        let index = self.hover.as_ref().map_or(last, |h| h.index.min(last));
+        let index = self
+            .hover
+            .as_ref()
+            .map_or(last, |h| h.index.clamp(range.start, last));
         let c = &self.data.candles[index];
         let info: SharedString = if self.hover.is_some() {
             format!(
@@ -592,7 +684,7 @@ impl Plot for TradingPlot {
                     Timeframe::Week => "週",
                     Timeframe::Month => "月",
                 },
-                self.data.candles.len()
+                bar_count(range, self.data.candles.len())
             )
             .into()
         };
@@ -683,7 +775,7 @@ impl Plot for TradingPlot {
                 .stroke(focus)
                 .paint(&price_bounds, window);
             Grid::new()
-                .y([g.volume_bar(index, c.volume).top() - g.layout.volume.top()])
+                .y([g.volume_bar(index - range.start, c.volume).top() - g.layout.volume.top()])
                 .stroke(focus)
                 .paint(&volume_bounds, window);
             if let Some(date) = &labels.date {
@@ -698,12 +790,31 @@ pub fn history_view(
     period: Timeframe,
     cx: &App,
 ) -> gpui_kit::base::ObservedElement<Stateful<Div>> {
+    let mut error = error.map(str::to_owned);
+    let series = series.and_then(|(s, current)| match s.for_period(period) {
+        Ok(s) => Some((Rc::new(s), current)),
+        Err(reason) => {
+            error = Some(reason);
+            None
+        }
+    });
+    let viewport = Rc::new(ChartViewport::new(
+        series.as_ref().map_or(0, |(s, _)| s.candles.len()),
+    ));
+    history_view_with_viewport(series, error.as_deref(), period, viewport, cx)
+}
+pub fn history_view_with_viewport(
+    series: Option<(Rc<ChartSeries>, Option<Price>)>,
+    error: Option<&str>,
+    period: Timeframe,
+    viewport: Rc<ChartViewport>,
+    cx: &App,
+) -> gpui_kit::base::ObservedElement<Stateful<Div>> {
     use super::state::{self, PanelState};
     let body = match series {
-        Some((series, current)) if !series.candles.is_empty() => match series.for_period(period) {
-            Ok(series) => view(series, current, period, cx),
-            Err(reason) => state::panel(PanelState::Failed(reason.into()), cx),
-        },
+        Some((series, current)) if !series.candles.is_empty() => {
+            view_with_viewport(series, current, period, viewport, cx)
+        }
         _ if error.is_some() => {
             state::panel(PanelState::Failed(error.unwrap().to_owned().into()), cx)
         }
@@ -724,8 +835,31 @@ pub fn volume_title(limit: Option<u64>, lot: u64) -> String {
         |v| format!("量（張） · 截斷於 {}", exact_volume(v, lot)),
     )
 }
+fn bar_count(range: VisibleRange, total: usize) -> String {
+    if range.count == total {
+        total.to_string()
+    } else {
+        format!("{} / {total}", range.count)
+    }
+}
 pub fn view(data: ChartSeries, current: Option<Price>, period: Timeframe, cx: &App) -> Div {
-    let clip = volume_clip_limit(&data.candles.iter().map(|c| c.volume).collect::<Vec<_>>());
+    let viewport = Rc::new(ChartViewport::new(data.candles.len()));
+    view_with_viewport(Rc::new(data), current, period, viewport, cx)
+}
+pub fn view_with_viewport(
+    data: Rc<ChartSeries>,
+    current: Option<Price>,
+    period: Timeframe,
+    viewport: Rc<ChartViewport>,
+    cx: &App,
+) -> Div {
+    let range = viewport.range.get().clamp(data.candles.len());
+    let clip = volume_clip_limit(
+        &data.candles[range.start..range.start + range.count]
+            .iter()
+            .map(|c| c.volume)
+            .collect::<Vec<_>>(),
+    );
     let clip_title = clip.map_or(String::new(), |v| {
         format!(" · {}", volume_title(Some(v), data.lot_size))
     });
@@ -744,7 +878,7 @@ pub fn view(data: ChartSeries, current: Option<Price>, period: Timeframe, cx: &A
                         Timeframe::Week => "週",
                         Timeframe::Month => "月",
                     },
-                    data.candles.len(),
+                    bar_count(range, data.candles.len()),
                     clip_title
                 ))
                 .test_support()
@@ -760,7 +894,11 @@ pub fn view(data: ChartSeries, current: Option<Price>, period: Timeframe, cx: &A
                             } else {
                                 TradingPlot {
                                     period,
-                                    ..TradingPlot::new(data.clone(), current)
+                                    ..TradingPlot::with_viewport(
+                                        data.clone(),
+                                        current,
+                                        viewport.clone(),
+                                    )
                                 }
                                 .into_any_element()
                             };

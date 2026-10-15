@@ -18,7 +18,7 @@ mod tests {
             .collect();
         assert_eq!(
             images.len(),
-            8,
+            10,
             "create goldens with UPDATE_SNAPSHOTS=1 cargo test --test rendering"
         );
         for image in images {

@@ -27,10 +27,31 @@ impl ChartLabels {
         period: Timeframe,
         window: &mut Window,
     ) -> Self {
+        Self::for_range(
+            g,
+            data,
+            current,
+            hover,
+            period,
+            window,
+            VisibleRange::reset(data.candles.len()),
+        )
+    }
+    pub fn for_range(
+        g: &ChartGeometry,
+        data: &ChartSeries,
+        current: Option<Price>,
+        hover: Option<&TooltipState>,
+        period: Timeframe,
+        window: &mut Window,
+        range: VisibleRange,
+    ) -> Self {
+        let range = range.clamp(data.candles.len());
+        let candles = &data.candles[range.start..range.start + range.count];
         let font = g.layout.caption;
-        let last = data.candles.len() - 1;
-        let index = hover.map_or(last, |h| h.index.min(last));
-        let candle = &data.candles[index];
+        let last = candles.len() - 1;
+        let index = hover.map_or(last, |h| h.index.saturating_sub(range.start).min(last));
+        let candle = &candles[index];
         let value: SharedString = exact_volume(candle.volume, data.lot_size).into();
         let width = (px(measure_text_width(&value, font, window)) + font * 2. / 3.)
             .max(g.layout.axis_width - font * 2. / 3.);
@@ -52,7 +73,9 @@ impl ChartLabels {
                 bounds: g.price_tag(hover.cross_line.y),
             });
         }
-        if let Some(current) = current {
+        if let Some(current) =
+            current.filter(|p| (g.domain[0]..=g.domain[1]).contains(&(p.0 as f64)))
+        {
             let frame = g.price_tag(g.price_y(current));
             if !price.iter().any(|l| intersects(l.bounds, frame)) {
                 price.push(ChartLabel {
@@ -111,9 +134,9 @@ impl ChartLabels {
         let mut date_ticks: Vec<_> = indices
             .into_iter()
             .map(|ix| {
-                let text: SharedString = date_text(data.candles[ix].time, period).into();
+                let text: SharedString = date_text(candles[ix].time, period).into();
                 let width = px(measure_text_width(&text, font, window));
-                let x = px(g.candle(ix, &data.candles[ix]).x);
+                let x = px(g.candle(ix, &candles[ix]).x);
                 let left = if ix == 0 {
                     x
                 } else if ix == last {

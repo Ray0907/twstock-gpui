@@ -16,6 +16,7 @@
 - 三欄工作區：自選（含迷你走勢線）、走勢圖、行情（五檔、買賣比例、成交量與位置）。面板可拖曳與縮放。
 - 五檔下方固定提供「位置」：今日價格區間條（低、高、昨收、開、金色現價；跌停／漲停另列軸下方）、已載入日線的高低與現價區間百分位、今日累計量／前 5 日平均日量。沒有成交價就不畫現價，明示參考價；MIS 不支援逐筆時，逐筆標題與內容整塊不佔空間。小視窗可捲動行情面板。
 - 走勢圖用 gpui-kit 的 plot 元件自繪：蠟燭（收高實心、收低空心，不只靠顏色分方向）、MA5 / MA10 / MA20、成交量副圖、金色十字游標與軸標籤、最高最低價標註、現價線。
+- 圖表縮放／平移：垂直滾動或觸控板捏合以游標為中心縮放，水平滾動或滑鼠左鍵拖曳平移；雙擊、切換商品或週期恢復全覽。
 - 成交量副圖在單一極端大量壓扁其他柱時才使用穩健上限：`nice(P95 × 1.2)`，可視資料最大量嚴格超過上限的 2.5 倍才啟用。截斷柱有斷口與真實量標籤（與量軸共用 `k`／`M` 縮寫），標題顯示「截斷於 N」；十字游標仍讀原始量，日／週／月線共用同一規則。
 - 紅漲綠跌（台股慣例），平盤為灰。價格與數字一律中性色，只有漲跌上色。
 - 日／週／月線可切換；週、月由既有日線聚合，不額外請求。切換股票保留目前週期，不跨重啟保存。沒有免費分鐘線，介面不放停用的分鐘選項。
@@ -114,7 +115,7 @@ cargo test --test rendering
 ```
 
 - `cargo test --test rendering` 在不開視窗的情況下用 GPU 離屏渲染，輸出 `/tmp/twstock-gpui-*.png`，並檢查像素、版面邊界、選取、面板拖曳與縮放。可在 SSH 下執行。固定使用範例資料，不讀你的設定也不連網。
-- 8 個靜態場景另比對 `tests/snapshots/` 的 golden PNG：dark、light、crosshair、dark-small、weekly、monthly、position、volume-clip。原圖與 golden 都以 2×2 box filter 縮小一半；每色頻差 ≤2 忽略，超過 0.05% 像素不同即失敗，尺寸必須一致。loading 的 Spinner 與 palette 的游標閃爍不納入。不同 OS／字型／GPU 的文字渲染可能造成差異，更新前請人工看圖。
+- 10 個靜態場景另比對 `tests/snapshots/` 的 golden PNG：dark、light、crosshair、dark-small、weekly、monthly、position、volume-clip、zoomed-in、panned-to-left。原圖與 golden 都以 2×2 box filter 縮小一半；每色頻差 ≤2 忽略，超過 0.05% 像素不同即失敗，尺寸必須一致。loading 的 Spinner 與 palette 的游標閃爍不納入。不同 OS／字型／GPU 的文字渲染可能造成差異，更新前請人工看圖。
 - 更新基準：`UPDATE_SNAPSHOTS=1 cargo test --test rendering`，再看過 PNG 與 diff；沒有這個旗標時，缺基準也會失敗。差異圖和實際圖保存在 `/tmp/twstock-gpui-snapshot/<name>.diff.png`、`<name>.actual.png`。比較器單元測試隨 `cargo test` 執行；GPU 快照仍需另外執行上述 rendering 命令。
 - 網路測試預設不跑。要對真實來源做一次煙霧測試：
 

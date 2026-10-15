@@ -4,7 +4,7 @@ use image::{
 };
 use std::path::Path;
 
-/// All eight static GPU scenes exceed 300 KB at native 2x resolution.
+/// Static GPU scenes exceed 300 KB at native 2x resolution.
 /// Store and compare every scene at half resolution, with an exact 2x2 box filter.
 pub fn assert_snapshot(name: &str, actual: &RgbaImage) {
     let actual = box_half(actual);
