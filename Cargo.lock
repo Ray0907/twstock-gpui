@@ -7098,6 +7098,7 @@ dependencies = [
  "gpui-kit",
  "html5ever",
  "image",
+ "objc",
  "proc-macro2",
  "serde",
  "serde_json",
