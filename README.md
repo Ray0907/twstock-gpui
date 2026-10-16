@@ -1,125 +1,145 @@
 # twstock-gpui
 
-繁體中文 · [English](README.en.md)
+[繁體中文](README_tw.md) · English
 
-台股看盤桌面程式，自用。原生 macOS，用 [gpui-kit](https://github.com/longbridge/gpui-kit) 的 GPUI 元件寫成，不是網頁。
+An **experimental** desktop watch app for Taiwan stocks, built for personal use. Native macOS in Rust with [gpui-kit](https://github.com/longbridge/gpui-kit) — not a web wrapper.
 
-![深色主題](tests/snapshots/dark.png)
+> **Experimental Project:** This repo is an ongoing experiment in building a native financial UI and strict visual/domain separation with GPUI. It relies on unofficial public web endpoints, has known coverage gaps, and is strictly for personal exploration — not a production trading terminal.
 
-畫面為編造的範例資料（代號 99 開頭的虛構商品），不是真實行情。
+![Dark theme](tests/snapshots/dark.png)
 
-## 功能
+*Screenshots show deterministic sample data (fictional instruments starting with `99`), not live market quotes. When no config file is present, the app starts in this sample mode so you can try it out of the box.*
 
-- 實際張數四捨五入至整張並加千分位；量軸刻度保留 k/M 縮寫。游標選取日期時，量副圖右軸標出該柱實際量（截斷柱仍顯示真實量），無游標則淡色顯示最新量；日期／價格／量標籤會避讓軸刻度。
-- 面板載入中以置中的 Spinner 與淡色說明呈現；載入失敗附原因，無資料與圖表空間不足也在內容區置中。近期區間載入完成前不顯示「0 根日線」。
+## Workspace & Controls
 
-- 三欄工作區：自選（含迷你走勢線）、走勢圖、行情（五檔、買賣比例、成交量與位置）。面板可拖曳與縮放。
-- Cmd+Shift+R（⌘⇧R）重設預設版面；搜尋視窗開啟時不觸發。
-- 五檔下方固定提供「位置」：今日價格區間條（低、高、昨收、開、金色現價；跌停／漲停另列軸下方）、已載入日線的高低與現價區間百分位、今日累計量／前 5 日平均日量。沒有成交價就不畫現價，明示參考價；MIS 不支援逐筆時，逐筆標題與內容整塊不佔空間。小視窗可捲動行情面板。
-- 走勢圖用 gpui-kit 的 plot 元件自繪：蠟燭（收高實心、收低空心，不只靠顏色分方向）、MA5 / MA10 / MA20、成交量副圖、金色十字游標與軸標籤、最高最低價標註、現價線。
-- 圖表縮放／平移：垂直滾動或觸控板捏合以游標為中心縮放，水平滾動或滑鼠左鍵拖曳平移；雙擊、切換商品或週期恢復全覽。
-- 成交量副圖在單一極端大量壓扁其他柱時才使用穩健上限：`nice(P95 × 1.2)`，可視資料最大量嚴格超過上限的 2.5 倍才啟用。截斷柱有斷口與真實量標籤（與量軸共用 `k`／`M` 縮寫），標題顯示「截斷於 N」；十字游標仍讀原始量，日／週／月線共用同一規則。
-- 紅漲綠跌（台股慣例），平盤為灰。價格與數字一律中性色，只有漲跌上色。
-- 日／週／月線可切換；週、月由既有日線聚合，不額外請求。切換股票保留目前週期，不跨重啟保存。沒有免費分鐘線，介面不放停用的分鐘選項。
-- ⌘K 搜尋商品，依代號前綴或名稱子字串加入自選；上下鍵選取、Enter 加入、Esc 關閉。已加入與超過訂閱上限會明確提示。
-- 深色與淺色主題。
-- 連線狀態一直看得到：連線中、正常、過期、失敗、休市。斷線不會被顯示成平盤。
+The window is split into three resizable panels: **Watchlist** (with sparklines), **Chart**, and **Quote Detail** (5-level order book, buy/sell pressure, volume, and price position).
 
-![淺色主題](tests/snapshots/light.png)
+- **Charts & Market Conventions**
+  - Custom-drawn candlesticks (solid when closing up, hollow when down — direction never relies on color alone), MA5 / MA10 / MA20, a volume sub-chart, high/low markers, a gold crosshair, and a last-price line.
+  - Switch between **Day / Week / Month** bars. Weekly and monthly bars are aggregated directly from loaded daily history without extra network requests. (There is no free minute-bar source, so no disabled minute button is shown.)
+  - Scroll vertically or pinch on the trackpad to zoom around the cursor; scroll horizontally or drag to pan. Double-click or switch instrument/period to reset the view.
+  - Follows Taiwan market colors (**red up, green down**, flat in grey). Prices and quantities stay neutral; only price changes carry color. Includes both dark and light themes.
 
-![十字游標](tests/snapshots/crosshair.png)
+- **Keyboard Shortcuts**
+  - `⌘K` — Open instrument search (listed and OTC stocks & ETFs). Filter by code prefix or case-insensitive name substring; `↑`/`↓` to select, `Enter` to add, `Esc` to close.
+  - `Delete` / `Backspace` — Remove the selected row from the watchlist (also available via the `…` menu on the watchlist header).
+  - `⌘⇧R` — Reset panel layout to default (disabled while the search dialog is open).
 
-![週線](tests/snapshots/weekly.png)
+![Light theme](tests/snapshots/light.png)
 
-![月線](tests/snapshots/monthly.png)
+## Getting Started
 
-## 資料來源
+### Requirements
 
-| 用途 | 來源 | 限制 |
-|---|---|---|
-| 即時報價與五檔 | 證交所 MIS（`mis.twse.com.tw`） | 非官方端點，無保證。約 5 秒更新一次，程式輪詢不少於 5 秒。沒有逐筆成交。成交價欄位常為 `-`。 |
-| 歷史日線 | 證交所 `STOCK_DAY` | 一次一個月，往前補到 100 根，最多回溯 12 個月。目前只支援上市，上櫃歷史尚未接。 |
-| 商品清單 | 證交所 ISIN 公告清單，上市 `strMode=2`、上櫃 `strMode=4` | 只收官方「股票」及「ETF」分類；以分類決定 ETF 價階，不猜代號前綴。 |
-
-歷史日線會快取在 `~/.cache/twstock-gpui/history/`（每檔一個檔案）：只有在月底之後抓到的已結束月份才視為最終版、不再重抓，當月與月中抓到的一律重抓；錯誤回應不會寫入快取，快取損毀時退回網路。選中的商品優先載入，其餘在背景排隊，請求間隔維持至少 2 秒；載入失敗會以 60 秒起、最長 10 分鐘的退避自動重試，選取該商品則立即重試。
-
-只供個人看盤。不是投資建議，也不保證資料正確或即時。請不要提高輪詢頻率。
-
-沒有設定檔時使用固定種子的範例資料，所以在任何機器上都可以直接試。
-
-## 環境需求
-
-- macOS，需要 Metal。只在 Apple Silicon 上驗證過。
-- 完整的 Xcode（不是只有 Command Line Tools），並安裝 Metal toolchain：
-
+- **macOS with Metal** (verified on Apple Silicon).
+- **Full Xcode** (not just Command Line Tools) with the Metal toolchain installed:
   ```sh
   sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
   sudo xcodebuild -license accept
   xcodebuild -runFirstLaunch
   xcodebuild -downloadComponent MetalToolchain
   ```
+- **[rustup](https://rustup.rs)** — `rust-toolchain.toml` pins Rust `1.97.1` and installs it automatically on first build.
+- System `curl` (used for market data requests).
 
-- [rustup](https://rustup.rs)。`rust-toolchain.toml` 會固定使用 1.97.1，第一次建置時自動安裝。
-- 系統的 `curl`（行情請求用它）。
+### Run & Bundle
 
-## 執行
+Run inside a desktop session with a display (a window cannot be opened over plain SSH). The first build takes a few minutes:
 
 ```sh
-git clone <這個 repo>
+git clone <this repo>
 cd twstock-gpui
 cargo run --release
 ```
 
-要在有螢幕的桌面 session 執行（不能從 SSH 開視窗）。第一次建置需要幾分鐘。
-
-### 打包成 .app（含圖示）
+`cargo run` sets the macOS Dock icon at startup from `assets/icon/icon-1024.png`. If you prefer a standalone `.app` bundle:
 
 ```sh
-./scripts/bundle-app.sh   # 產生 target/bundle/twstock-gpui.app
+./scripts/bundle-app.sh   # produces target/bundle/twstock-gpui.app
 ```
 
-- 未簽署；第一次開啟可能要在 Finder 右鍵 → 打開。
-- `cargo run` 不會顯示 Dock 圖示（GPUI 沒有提供設定 API），要看圖示請開打包後的 `.app`。
-- 圖示來源是 `assets/icon/icon-1024.png`，由 Gemini 圖像生成後去背；重新產生 `.icns`：`./scripts/make-icon.sh`（只用 macOS 內建的 `sips`、`iconutil`）。
+- The bundle is unsigned; on first launch you may need to right-click → **Open** in Finder.
+- The icon artwork (`assets/icon/icon-1024.png`) was generated with Gemini and cut out from its background. Run `./scripts/make-icon.sh` to regenerate `AppIcon.icns` using macOS's built-in `sips` and `iconutil`.
 
-### 自選清單
+### Watchlist Configuration
 
-建立 `~/.config/twstock-gpui/watchlist.toml`；在 app 內加入／移除商品會寫回這個檔案：
+Press `⌘K` to search and add your first instrument — when starting from sample mode, the app creates `~/.config/twstock-gpui/watchlist.toml` and switches to live MIS quotes (without copying sample symbols into your config). You can also create the file by hand:
 
 ```toml
 [[watchlist]]
-market = "tse"   # tse 上市、otc 上櫃
-code = "889901"   # 範例代號，請換成自己要看的
+market = "tse"    # "tse" for listed (TWSE), "otc" for OTC (TPEx)
+code = "889901"   # replace with the code you want to watch
 
 [[watchlist]]
 market = "tse"
 code = "889902"
 ```
 
-- 檔案不存在：使用範例資料。
-- 檔案格式錯誤：顯示失敗，不會悄悄退回範例資料。
-- 這個檔案只在你的機器上，不在 repo 裡。
-- 也可直接按 ⌘K（或標題列「搜尋商品」）加入。從範例模式加入第一檔時，會明確提示建立設定並切換真實 MIS；不把範例商品寫入設定。
-- 在自選選取一列後按 Delete／Backspace，或開啟「自選」標題旁的「…」→「移除選取」。真實自選的加入／移除會用 `toml_edit` 原子寫回，保留未移除內容的註解與格式；支援 `[[watchlist]]`、`[[symbol]]` 等原有別名及 inline array。
-- 空清單會保存為空清單，重啟不退回範例。範例商品的移除只影響當次展示，不寫入真實自選。
-- 訂閱變更在現有 provider 的下一輪請求生效，不必重啟；仍遵守至少 5 秒的輪詢間隔。排序尚未提供。
+- **Preserves formatting:** Adding or removing symbols in the UI updates the file atomically via `toml_edit`, keeping your comments, formatting, inline arrays, and table aliases (`[[watchlist]]`, `[[symbol]]`, `[[symbols]]`, `[[instruments]]`). Changes take effect on the next polling round (at least 5 seconds between rounds) without restarting.
+- **No silent fallback:** Missing config uses sample data. A malformed config displays the parse error instead of quietly falling back to sample data. Emptying your watchlist saves an empty list and stays empty across restarts.
 
-### 位置資訊的口徑
+---
 
-- 今日區間軸只取已知的低、高、昨收、成交價與開盤的最小／最大值，兩端各留範圍的 8%，至少一個商品升降單位；平坦區間也有可讀的範圍。昨收在當日高低外仍納入，參考價不納入。標籤量測實際字寬後排開並以引線連回原價位，標記與軸共用比例；跌停／漲停只在軸下左右兩端標示，不再壓縮當日波動。
-- 近期區間只用已載入日線的低／高，標出實際根數，不補假資料，也不因切換週／月線改變。現價百分位夾在 0–100%；高低相同且現價相等時取 50%，沒有成交價時為 `—`。
-- 量比的分母取報價日期之前最近 5 根完整日線，不把當日未完成日線算進平均。少於 5 根、均量為零、缺少今日量或報價日期時顯示 `—`；今日零量可顯示 `0.00×`。
-- 盤中與未知交易時段標「盤中累計」，盤後／休市標「全日累計」。這不是同時刻量比，不按已過交易時間換算、不推估全天量，也不自行給出放量／縮量結論。
-- 量副圖 P95 使用 nearest-rank（由小到大第 `ceil(0.95 × 根數)` 筆，包含零量）。少於 20 根時 P95 等於最大量，保守維持完整量軸；週／月線即使未截斷也會顯示完整真實量。
+## Data Sources & Honest States
 
-### 週期與搜尋資料
+A core principle of this codebase is **never inventing data to fill the screen**:
 
-- 週線按交易日所在 ISO 週分組（跨年也依 ISO 週年），月線按年月分組。開盤取首日、收盤取末日、高低取極值、量加總；已知的今日即時日線會納入未完成期間。沒有成交價時的中間參考價不會拿來造日線。
-- MA5／10／20 以目前週期重算；根數不足就顯示 `—`。日期軸日／週為 `MM/DD`，月為 `YYYY/MM`。圖表資訊列顯示實際根數，不補假的月份；目前 Mock 為週 15 根、月 4 根，月 MA 因不足 5 根而留空。2026-10-15 三檔真實資料實測皆為週 22 根、月 6 根；月 MA10／20 仍不足根數。
-- 搜尋排序：代號或名稱完全相符 → 代號前綴 → 名稱子字串；同級依代號、再市場代碼排序。名稱比對不區分英文字母大小寫。
-- 清單保留在記憶體，磁碟快取位於 `~/.cache/twstock-gpui/directory.json`，含抓取時間；24 小時到期後重抓。搜尋再次開啟時也會檢查到期；失敗顯示原因，不使用假清單或過期快取。
+- **Connection status** is always visible in the status bar (`connecting`, `ok`, `stale`, `failed`, `market closed`). A dropped connection is never disguised as a flat price.
+- **Missing trades:** When an instrument has no trade price yet, no last-price line is drawn and the quote explicitly marks the reference price. Mid-quote reference prices are never used to fabricate daily bars.
+- **Explicit loading & errors:** Loading states use a centered spinner; failures show the reason; empty or too-narrow panels state why in the center of the canvas. While recent daily bars are still loading, the UI never flashes a misleading "0 daily bars".
 
-## 驗證
+| Use | Source | Behavior & Limits |
+|---|---|---|
+| **Live quotes & order book** | TWSE MIS (`mis.twse.com.tw`) | Unofficial endpoint, no guarantees. Updates roughly every 5 s; the app polls no faster than every 5 s. No tick-by-tick trade feed (the trade-list section collapses completely when unsupported). The trade price field is often `-` between matches. |
+| **Daily history** | TWSE `STOCK_DAY` | Fetched one month at a time, back-filled up to 100 bars (at most 12 months back). **Listed (TSE) only**; OTC history is not wired up yet. |
+| **Instrument directory** | TWSE ISIN lists (`strMode=2` listed, `strMode=4` OTC) | Includes only the official "stock" and "ETF" categories. Tick-size rules are determined strictly from the official category, never guessed from code prefixes. |
+
+**Caching & Backoff:**
+- **Daily history** is cached per instrument under `~/.cache/twstock-gpui/history/`. A past month is treated as final once fetched after that month ended (any mid-month snapshot of a past month is refetched); the current month's cache is reused until a newer weekday session has closed (14:00 Taipei time). Error responses are never cached, and corrupt cache files fall back to the network. The active symbol loads first while others queue in the background with at least 2 seconds between requests. Failed loads retry with exponential backoff (60 s up to 10 min), or immediately when you re-select the symbol.
+- **Instrument directory** is cached at `~/.cache/twstock-gpui/directory.json` and refreshed after 24 hours (also checked when reopening search). If a refresh fails, the error is shown rather than serving stale or fake data.
+
+> **Disclaimer:** For personal use only. Not investment advice, and data is not guaranteed to be accurate or real-time. Please do not raise the polling frequency.
+
+---
+
+## Chart & Metric Definitions
+
+![Crosshair](tests/snapshots/crosshair.png)
+
+### Volume Display & Spike Clipping
+- **Lot formatting:** Volume figures are rounded to whole lots with thousands separators, while axis ticks use `k` / `M` abbreviations. Hovering a bar highlights its exact volume on the right axis; without a cursor, the latest volume is shown faintly. Date, price, and volume badges avoid colliding with axis ticks.
+- **Spike clipping:** To keep a single outlier day from flattening every other volume bar, the sub-chart applies a ceiling of `nice(P95 × 1.2)` — but **only** when the visible maximum strictly exceeds `2.5×` that ceiling (P95 uses nearest-rank `ceil(0.95 × count)` including zeros; series under 20 bars are never clipped). Clipped bars render with a break mark, a true-volume label, and a "clipped at N" note in the header, while the crosshair still reads the unclipped volume.
+- **Weekly & monthly aggregation:** Weeks group by the trading day's ISO week (using ISO week-year across year boundaries); months group by `YYYY/MM`. Today's live bar is folded into the current unfinished period. MA5 / 10 / 20 are recomputed for the active period and display `—` when bars are insufficient.
+
+![Weekly chart](tests/snapshots/weekly.png)
+
+![Monthly chart](tests/snapshots/monthly.png)
+
+### The "Position" Block (Below the Order Book)
+- **Today's range bar:** Spans the min/max of known low, high, previous close, open, and trade price, padded by 8% on each side (at least one tick so flat days remain readable). A previous close outside today's high/low is included in the span; a reference price is not. Labels measure their actual text width to spread apart and connect back to their price level with leader lines. Limit-down and limit-up prices sit at the two ends below the axis so they don't compress intraday movement.
+- **Recent range percentile:** Computed strictly from the low/high of loaded daily bars (showing the exact bar count), unaffected by switching the chart to weekly or monthly view. Clamped to `0–100%` (`50%` if high equals low at the trade price; `—` if there is no trade price).
+- **Volume ratio (Today / 5-day average):** Divides today's volume by the average of the 5 most recent *complete* daily bars prior to the quote date (today's unfinished bar is never mixed into the denominator). Labeled "intraday cumulative" during the session and "full-day cumulative" after close — no time-of-day extrapolation is performed, and the UI draws no surge/dry-up conclusions for you.
+
+---
+
+## Architecture & Verification
+
+```text
+src/
+  design/    Single source of visual truth: palette, typography, up/down direction, spacing, radii, shared parts, charts
+  market/    Domain types, MarketStore, MIS & history providers, config persistence (no gpui dependency)
+  panels/    Watchlist, chart, quote, and status bar panels (delegates all visual styling to design)
+tests/
+  design_rules.rs          AST/token scanner that fails if code outside src/design hard-codes colors, sizes, weights, spacing, or radii
+  provider_conformance.rs  Shared behavioral contract tests for all market providers
+  rendering.rs             GPU off-screen rendering & golden snapshot tests
+  live_shot.rs             Opt-in smoke test against live TWSE endpoints
+```
+
+- **Strict visual boundary:** Enforced by `design_rules`. Panels compose semantic components from `design` rather than choosing colors or pixel spacing ad hoc.
+- **Decoupled market interface:** The UI talks only to domain types and `MarketStore` (prices use `0.0001` fixed-point representation; tick rules belong to the instrument). Adding a broker API or WebSocket feed only requires implementing a provider that passes `provider_conformance`.
+
+### Running Tests
 
 ```sh
 cargo clippy --all-targets -- -D warnings
@@ -127,54 +147,25 @@ cargo test
 cargo test --test rendering
 ```
 
-- `cargo test --test rendering` 在不開視窗的情況下用 GPU 離屏渲染，輸出 `/tmp/twstock-gpui-*.png`，並檢查像素、版面邊界、選取、面板拖曳與縮放。可在 SSH 下執行。固定使用範例資料，不讀你的設定也不連網。
-- 10 個靜態場景另比對 `tests/snapshots/` 的 golden PNG：dark、light、crosshair、dark-small、weekly、monthly、position、volume-clip、zoomed-in、panned-to-left。原圖與 golden 都以 2×2 box filter 縮小一半；每色頻差 ≤2 忽略，超過 0.05% 像素不同即失敗，尺寸必須一致。loading 的 Spinner 與 palette 的游標閃爍不納入。不同 OS／字型／GPU 的文字渲染可能造成差異，更新前請人工看圖。
-- 更新基準：`UPDATE_SNAPSHOTS=1 cargo test --test rendering`，再看過 PNG 與 diff；沒有這個旗標時，缺基準也會失敗。差異圖和實際圖保存在 `/tmp/twstock-gpui-snapshot/<name>.diff.png`、`<name>.actual.png`。比較器單元測試隨 `cargo test` 執行；GPU 快照仍需另外執行上述 rendering 命令。
-- 網路測試預設不跑。要對真實來源做一次煙霧測試：
-
+- **Off-screen GPU rendering (`rendering`):** Renders headless on the GPU to `/tmp/twstock-gpui-*.png` without opening a window (works over SSH, uses fixed sample data, never touches your config or the network). Verifies layout geometry, panel dragging/resizing, search, keyboard navigation, and compares 10 static scenes against golden PNGs in `tests/snapshots/` (2×2 box-filtered, ignoring per-channel diffs ≤ 2, failing above 0.05% differing pixels).
+  - To update golden snapshots after visual changes: `UPDATE_SNAPSHOTS=1 cargo test --test rendering`, then inspect the diffs under `/tmp/twstock-gpui-snapshot/`.
+- **Live network smoke tests (off by default):**
   ```sh
+  # Fetches live data for your watchlist.toml and renders /tmp/twstock-gpui-live-{dark,light}.png
   TWSTOCK_GPUI_LIVE=1 cargo test --test live_shot
-  ```
 
-  會讀你的 `watchlist.toml`，載入清單以取得正確商品類型，輸出 `/tmp/twstock-gpui-live-{dark,light}.png`，並列出每檔實際日／週／月根數。真實回應不會寫進 repo。
-
-  單獨驗證商品清單的兩個市場端點（強制實抓，回報筆數與耗時）：
-
-  ```sh
+  # Verifies both TWSE/OTC directory endpoints directly and prints counts & latency
   TWSTOCK_GPUI_LIVE=1 cargo test --test directory directory_live_opt_in -- --nocapture
   ```
 
-  Rendering 另輸出 `/tmp/twstock-gpui-position.png`、`/tmp/twstock-gpui-volume-clip.png`（含位置與單根尖峰截斷的 Mock 工作區）、`/tmp/twstock-gpui-position-outside.png`（編造的昨收位於當日高低範圍外案例）、`/tmp/twstock-gpui-weekly.png`、`/tmp/twstock-gpui-monthly.png`、`/tmp/twstock-gpui-palette.png`，均用編造資料；同時驗證搜尋、鍵盤加入、重複／超量、移除與空清單。
+## Known Limitations
 
-## 結構
+- **Market calendar:** Market closure is inferred from Taipei time, weekends, and the quote's date; the official TWSE holiday calendar is not integrated yet.
+- **OTC history & history depth:** OTC daily history is not wired up yet. Listed daily history loads up to 100 bars (at most 12 months back), which yields roughly 20+ weekly bars and 5–6 monthly bars — meaning monthly MA10 / MA20 will normally show `—`.
+- **Instrument scope:** Search covers official "stock" and "ETF" categories only; warrants, preferred shares, Innovation Board, ETNs, TDRs, and beneficiary securities are excluded so tick sizes are never guessed.
+- **Platform:** Tested on macOS (Apple Silicon) only, without multi-day soak testing.
 
-```
-src/
-  design/    視覺的唯一來源：色階、字級角色、方向（漲跌）、間距、圓角、組合件、圖表
-  market/    行情領域型別、MarketStore、MIS 與歷史 provider、設定。不依賴 gpui
-  panels/    自選、走勢、行情、狀態列。只呼叫 design，不自己決定視覺
-tests/
-  design_rules.rs        掃描 design 以外的程式碼，出現寫死的顏色、字級、字重、間距、圓角就失敗
-  provider_conformance.rs  所有 provider 共用的行為測試
-  rendering.rs / live_shot.rs  離屏渲染
-```
+## License
 
-- **Design guideline**：design 以外不得決定視覺，由 `design_rules` 測試強制。
-- **行情介面**：UI 只依賴領域型別與 `MarketStore`。要接其他來源（券商 API、websocket），實作一個 provider 並通過 `provider_conformance` 即可，UI 不用改。價格用定點數（單位 0.0001），升降單位屬於商品（ETF 與股票不同）。
-
-## 已知限制
-
-- 休市依台北時間、週末與來源日期推斷，尚未接正式交易日曆。
-- MIS 沒有逐筆成交，該來源不顯示逐筆區塊；Mock 仍保留可收合的逐筆成交。
-- 上櫃歷史日線尚未接。新上市或歷史不足時，位置區塊照實顯示根數，5 日均量不足顯示 `—`，不保證能補滿 100 根。
-- 位置只反映來源已提供／已載入的資料；量比未做盤中時段校正，日線量與即時量也可能有來源更新時差。
-- 沒有分鐘線。日線仍最多回溯 12 個月／目前載入 100 根；因此週、月歷史較短，月線通常不足 MA10／20 所需根數。
-- 商品搜尋只支援官方「股票」與「ETF」分類；權證、特別股、創新板、ETN、TDR、受益證券尚未納入，避免猜測價階。
-- 商品清單與報價仍依賴外部來源；快取過期且更新失敗時，搜尋面板會顯示失敗。
-- 只在 macOS 驗證過，也沒有長時間連續執行的驗證。
-
-## 授權
-
-[Apache-2.0](LICENSE)。使用的 gpui-kit 同為 Apache-2.0。
-
-授權只涵蓋本 repo 的程式碼；證交所行情資料的使用與再散布另有規定，商用前請自行向證交所確認。
+Code in this repository is licensed under [Apache-2.0](LICENSE) (as is `gpui-kit`).
+TWSE market data usage and redistribution are subject to TWSE's own terms and are not covered by this repo's license; check with TWSE before any commercial use.
