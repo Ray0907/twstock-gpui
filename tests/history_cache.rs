@@ -47,16 +47,22 @@ fn body(year: &str, month: &str) -> String {
     json!({"stat":"OK","data":[[format!("{}/{}/01",year.parse::<i32>().unwrap()-1911,month),"1,000","0","10","12","9","11"]]}).to_string()
 }
 fn at(date: &str) -> i64 {
+    at_time(date, 12, 0)
+}
+fn at_time(date: &str, hour: u32, minute: u32) -> i64 {
     chrono::FixedOffset::east_opt(8 * 3600)
         .unwrap()
         .from_local_datetime(
             &NaiveDate::parse_from_str(date, "%Y-%m-%d")
                 .unwrap()
-                .and_hms_opt(12, 0, 0)
+                .and_hms_opt(hour, minute, 0)
                 .unwrap(),
         )
         .unwrap()
         .timestamp()
+}
+fn test_symbol() -> Symbol {
+    Symbol::new(Market::Listed, "889901").unwrap()
 }
 fn symbol() -> Symbol {
     Symbol::new(Market::Listed, "TEST").unwrap()
@@ -147,7 +153,7 @@ fn unreadable_directory_falls_back_to_identical_network_data() {
 }
 
 #[test]
-fn final_months_persist_across_provider_instances() {
+fn current_and_final_months_persist_across_provider_instances() {
     let dir = tempfile::tempdir().unwrap();
     let (mut cold, _) = setup(dir.path());
     let expected = cold.recent(&symbol(), 3, at("2026-10-16")).unwrap();
@@ -156,7 +162,7 @@ fn final_months_persist_across_provider_instances() {
         warm.recent(&symbol(), 3, at("2026-10-16")).unwrap(),
         expected
     );
-    assert_eq!(observer.log.lock().unwrap().len(), 1);
+    assert_eq!(observer.log.lock().unwrap().len(), 0);
     assert!(observer.clock.0.lock().unwrap().1.is_empty());
 }
 
@@ -194,7 +200,7 @@ fn failed_atomic_write_keeps_old_cache_and_does_not_fail_history() {
 }
 
 #[test]
-fn final_months_hit_without_sleep_current_month_always_refetched() {
+fn final_months_and_current_month_hit_without_sleep() {
     let dir = tempfile::tempdir().unwrap();
     let mut value = cache("2026-09", "2026-10-01");
     value["months"]["2026-08"] = cache("2026-08", "2026-09-01")["months"]["2026-08"].clone();
@@ -211,10 +217,85 @@ fn final_months_hit_without_sleep_current_month_always_refetched() {
     assert!(observer.clock.0.lock().unwrap().1.is_empty());
     provider.recent(&symbol(), 3, at("2026-10-16")).unwrap();
     let log = observer.log.lock().unwrap();
-    assert_eq!(log.len(), 2);
+    assert_eq!(log.len(), 1);
     assert!(log.iter().all(|(url, _)| url.contains("date=20261001")));
-    assert!(log[1].1 - log[0].1 >= Duration::from_secs(2));
 }
+#[test]
+fn current_month_cache_reuses_only_through_the_last_closed_weekday() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut provider, _) = setup(dir.path());
+    let symbol = test_symbol();
+
+    for (date, hour, minute, expected_requests) in [
+        ("2026-10-19", 15, 0, 1),  // Monday fetch after close
+        ("2026-10-19", 20, 0, 1),  // same day
+        ("2026-10-20", 10, 0, 1),  // Tuesday before close
+        ("2026-10-20", 14, 30, 2), // Tuesday has closed
+    ] {
+        provider
+            .recent(&symbol, 1, at_time(date, hour, minute))
+            .unwrap();
+        assert_eq!(provider.request_count(), expected_requests);
+    }
+}
+
+#[test]
+fn current_month_cache_normalizes_weekends_and_refetches_after_close() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut provider, _) = setup(dir.path());
+    let symbol = test_symbol();
+
+    for (date, hour, expected_requests) in [
+        ("2026-10-23", 15, 1), // Friday fetch after close
+        ("2026-10-25", 12, 1), // Sunday
+        ("2026-10-26", 10, 1), // Monday before close
+        ("2026-10-26", 14, 2), // Monday has closed
+    ] {
+        provider.recent(&symbol, 1, at_time(date, hour, 0)).unwrap();
+        assert_eq!(provider.request_count(), expected_requests);
+    }
+}
+
+#[test]
+fn current_month_cache_fetched_before_close_has_no_same_day_close() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut provider, _) = setup(dir.path());
+    let symbol = test_symbol();
+
+    provider
+        .recent(&symbol, 1, at_time("2026-10-28", 10, 0))
+        .unwrap();
+    provider
+        .recent(&symbol, 1, at_time("2026-10-28", 15, 0))
+        .unwrap();
+    assert_eq!(provider.request_count(), 2);
+}
+
+#[test]
+fn current_month_cache_without_complete_through_refetches() {
+    let dir = tempfile::tempdir().unwrap();
+    let value = cache("2026-10", "2026-10-19");
+    std::fs::write(dir.path().join("tse-889901.json"), value.to_string()).unwrap();
+    let (mut provider, _) = setup(dir.path());
+    provider
+        .recent(&test_symbol(), 1, at_time("2026-10-19", 20, 0))
+        .unwrap();
+    assert_eq!(provider.request_count(), 1);
+}
+
+#[test]
+fn current_month_cache_with_future_complete_through_refetches() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut value = cache("2026-10", "2026-10-19");
+    value["months"]["2026-10"]["complete_through"] = json!("2026-10-30");
+    std::fs::write(dir.path().join("tse-889901.json"), value.to_string()).unwrap();
+    let (mut provider, _) = setup(dir.path());
+    provider
+        .recent(&test_symbol(), 1, at_time("2026-10-20", 10, 0))
+        .unwrap();
+    assert_eq!(provider.request_count(), 1);
+}
+
 #[test]
 fn midmonth_and_end_of_month_snapshots_are_not_final() {
     for fetched in ["2026-09-15", "2026-09-30"] {

@@ -1,5 +1,5 @@
 use super::*;
-use chrono::{Datelike, NaiveDate};
+use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -120,6 +120,8 @@ type SharedThrottle<C> = Arc<Mutex<Throttle<C>>>;
 #[derive(Serialize, Deserialize)]
 struct CachedMonth {
     fetched_on: NaiveDate,
+    #[serde(default)]
+    complete_through: Option<NaiveDate>,
     rows: Vec<Candle>,
 }
 #[derive(Serialize, Deserialize)]
@@ -128,14 +130,37 @@ struct Cache {
     months: BTreeMap<String, CachedMonth>,
 }
 impl Cache {
-    fn final_rows(&self, month: NaiveDate, today: NaiveDate) -> Option<&[Candle]> {
+    fn final_rows(&self, month: NaiveDate, now: NaiveDateTime) -> Option<&[Candle]> {
+        let today = now.date();
         self.months
             .get(&month.format("%Y-%m").to_string())
             .filter(|cached| {
-                month < today.with_day(1).unwrap() && cached.fetched_on.with_day(1).unwrap() > month
+                if month < today.with_day(1).unwrap() {
+                    cached.fetched_on.with_day(1).unwrap() > month
+                } else if month == today.with_day(1).unwrap() {
+                    cached.complete_through.is_some_and(|complete_through| {
+                        weekday_or_before(last_closed(now)) <= weekday_or_before(complete_through)
+                    })
+                } else {
+                    false
+                }
             })
             .map(|cached| cached.rows.as_slice())
     }
+}
+fn last_closed(now: NaiveDateTime) -> NaiveDate {
+    let date = if now.hour() >= 14 {
+        now.date()
+    } else {
+        now.date().pred_opt().unwrap_or(now.date())
+    };
+    weekday_or_before(date)
+}
+fn weekday_or_before(mut date: NaiveDate) -> NaiveDate {
+    while date.weekday().number_from_monday() > 5 {
+        date = date.pred_opt().unwrap_or(date);
+    }
+    date
 }
 impl Default for Cache {
     fn default() -> Self {
@@ -238,6 +263,7 @@ impl<T: HttpTransport, C: HistoryClock> HistoryProvider<T, C> {
                     NaiveDate::parse_from_str(&format!("{key}-01"), "%Y-%m-%d").is_ok_and(|month| {
                         month.format("%Y-%m").to_string() == *key
                             && value.fetched_on <= today
+                            && value.complete_through.is_none_or(|d| d <= value.fetched_on)
                             && valid_rows(&value.rows, month)
                     })
                 })
@@ -258,15 +284,16 @@ impl<T: HttpTransport, C: HistoryClock> HistoryProvider<T, C> {
         &mut self,
         symbol: &Symbol,
         month: NaiveDate,
-        today: NaiveDate,
+        now: NaiveDateTime,
     ) -> Result<Vec<Candle>, String> {
+        let today = now.date();
         Symbol::new(symbol.market, &symbol.code)?;
         let path = self
             .cache
             .join(format!("{}-{}.json", symbol.market.exchange(), symbol.code));
         let mut cache = self.read_cache(&path, today);
         let key = month.format("%Y-%m").to_string();
-        if let Some(rows) = cache.final_rows(month, today) {
+        if let Some(rows) = cache.final_rows(month, now) {
             return Ok(rows.to_vec());
         }
         let url = format!(
@@ -291,6 +318,11 @@ impl<T: HttpTransport, C: HistoryClock> HistoryProvider<T, C> {
             key,
             CachedMonth {
                 fetched_on: today,
+                complete_through: Some(if now.hour() >= 14 {
+                    today
+                } else {
+                    today.pred_opt().unwrap_or(today)
+                }),
                 rows: rows.clone(),
             },
         );
@@ -321,6 +353,7 @@ pub struct HistoryLoad {
     symbol: Symbol,
     count: usize,
     end: NaiveDate,
+    now: NaiveDateTime,
     month: NaiveDate,
     months: usize,
     rows: Vec<Candle>,
@@ -331,11 +364,13 @@ impl HistoryLoad {
         if symbol.market != Market::Listed {
             return Err("上櫃歷史尚未接入".into());
         }
-        let end = local_time(now).date_naive();
+        let now = local_time(now).naive_local();
+        let end = now.date();
         Ok(Self {
             symbol,
             count,
             end,
+            now,
             month: end.with_day(1).unwrap(),
             months: 0,
             rows: Vec::new(),
@@ -356,7 +391,7 @@ impl HistoryLoad {
         ));
         if provider
             .read_cache(&path, self.end)
-            .final_rows(self.month, self.end)
+            .final_rows(self.month, self.now)
             .is_some()
         {
             Duration::ZERO
@@ -373,7 +408,7 @@ impl HistoryLoad {
         }
         self.rows.extend(
             provider
-                .month(&self.symbol, self.month, self.end)?
+                .month(&self.symbol, self.month, self.now)?
                 .into_iter()
                 .filter(|c| c.time <= self.end),
         );
@@ -407,13 +442,13 @@ impl<T: HttpTransport, C: HistoryClock> History for HistoryProvider<T, C> {
         if range.start > range.end {
             return Err("invalid range".into());
         }
-        let today = local_time(now()).date_naive();
+        let now = local_time(now()).naive_local();
         let mut month = range.end.with_day(1).ok_or("invalid range")?;
         let start = range.start.with_day(1).ok_or("invalid range")?;
         let mut rows = Vec::new();
         loop {
             rows.extend(
-                self.month(symbol, month, today)?
+                self.month(symbol, month, now)?
                     .into_iter()
                     .filter(|c| c.time >= range.start && c.time <= range.end),
             );
