@@ -70,6 +70,16 @@ cargo run --release
 
 要在有螢幕的桌面 session 執行（不能從 SSH 開視窗）。第一次建置需要幾分鐘。
 
+### 打包成 .app（含圖示）
+
+```sh
+./scripts/bundle-app.sh   # 產生 target/bundle/twstock-gpui.app
+```
+
+- 未簽署；第一次開啟可能要在 Finder 右鍵 → 打開。
+- `cargo run` 不會顯示 Dock 圖示（GPUI 沒有提供設定 API），要看圖示請開打包後的 `.app`。
+- 圖示來源是 `assets/icon/icon-1024.png`，由 Gemini 圖像生成後去背；重新產生 `.icns`：`./scripts/make-icon.sh`（只用 macOS 內建的 `sips`、`iconutil`）。
+
 ### 自選清單
 
 建立 `~/.config/twstock-gpui/watchlist.toml`；只有新檔不存在時才原地讀取舊的 `~/.config/twstock-gpui/watchlist.toml`，加入／移除商品會寫回實際載入的檔案，不複製或搬移舊檔：

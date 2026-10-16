@@ -69,6 +69,16 @@ cargo run --release
 
 Run it in a desktop session with a display; a window cannot be opened over SSH. The first build takes a few minutes.
 
+### Build a .app bundle (with icon)
+
+```sh
+./scripts/bundle-app.sh   # produces target/bundle/twstock-gpui.app
+```
+
+- Unsigned; the first launch may need right-click → Open in Finder.
+- `cargo run` shows no Dock icon (GPUI has no API to set one); open the bundled `.app` to see it.
+- The icon source is `assets/icon/icon-1024.png`, generated with Gemini image generation and cut out of its backdrop. Regenerate the `.icns` with `./scripts/make-icon.sh` (uses only macOS's built-in `sips` and `iconutil`).
+
 ### Watchlist
 
 Create `~/.config/twstock-gpui/watchlist.toml`; only when it is absent does the app read the legacy `~/.config/twstock-gpui/watchlist.toml` in place, with additions/removals written back to the loaded file without copying or moving it:
