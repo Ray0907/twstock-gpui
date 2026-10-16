@@ -11,6 +11,7 @@ Screenshots use invented sample data (fictional instruments with codes starting 
 ## Features
 
 - **Three-column workspace:** watchlist (with sparklines), chart, and quote detail (order book, buy/sell ratio, volume and position). Panels can be dragged and resized.
+- **Cmd+Shift+R (⌘⇧R)** resets the default layout; it is inactive while the search dialog is open.
 - **Position block** under the order book: today's price range bar (low, high, previous close, open, gold last price; limit-up/limit-down are labelled below the axis), the percentile of the last price within the loaded daily range, and today's cumulative volume against the average of the previous 5 days. With no trade price, no last price is drawn and a reference price is labelled as such. When the source has no tick-by-tick trades, that section takes no space. The quote panel scrolls in small windows.
 - **Chart** drawn with gpui-kit's plot components: candles (solid when the close is up, hollow when down, so direction does not rely on colour alone), MA5 / MA10 / MA20, a volume sub-chart, a gold crosshair with axis labels, high/low marks, and a last-price line.
 - **Zoom / pan:** vertical scroll or trackpad pinch zooms at the cursor; horizontal scroll or left-button drag pans. Double-click, switching instrument, or switching period resets to the full series.

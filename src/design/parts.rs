@@ -56,22 +56,6 @@ pub fn title_bar(cx: &App) -> TitleBar {
         .child(text::text(TextRole::Title, "台股看盤", cx))
         .child(div().flex_1())
 }
-pub fn reset_button() -> Button {
-    Button::new("reset-layout")
-        .ghost()
-        .small()
-        .icon(IconName::LayoutDashboard)
-        .accessibility_label(SharedString::from("重設版面"))
-        .tooltip(SharedString::from("重設版面"))
-}
-pub fn watch_button() -> Button {
-    Button::new("nav-watchlist")
-        .ghost()
-        .small()
-        .icon(IconName::PanelLeft)
-        .accessibility_label(SharedString::from("自選"))
-        .tooltip(SharedString::from("自選"))
-}
 pub fn pane(id: &'static str) -> ObservedElement<Stateful<Div>> {
     v_flex()
         .id(id)

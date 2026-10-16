@@ -18,7 +18,7 @@ use gpui_kit::{
     *,
 };
 use std::{path::PathBuf, rc::Rc};
-gpui_kit::actions!(workspace, [OpenPalette]);
+gpui_kit::actions!(workspace, [OpenPalette, ResetLayout]);
 pub struct Workspace {
     dock: Entity<DockArea>,
     watchlist: Entity<WatchlistPanel>,
@@ -95,6 +95,7 @@ impl Workspace {
     pub fn with_store(store: MarketStore, window: &mut Window, cx: &mut Context<Self>) -> Self {
         cx.bind_keys([
             KeyBinding::new("cmd-k", OpenPalette, Some("WatchWorkspace")),
+            KeyBinding::new("cmd-shift-r", ResetLayout, Some("WatchWorkspace")),
             KeyBinding::new("delete", RemoveWatch, Some("Watchlist")),
             KeyBinding::new("backspace", RemoveWatch, Some("Watchlist")),
         ]);
@@ -493,24 +494,12 @@ impl Render for Workspace {
             .track_focus(&self.focus)
             .key_context("WatchWorkspace")
             .on_action(cx.listener(|this, _: &OpenPalette, w, cx| this.open_palette(w, cx)))
+            .on_action(cx.listener(|this, _: &ResetLayout, w, cx| this.reset_layout(w, cx)))
             .child(
-                parts::title_bar(cx)
-                    .child(
-                        palette_design::search_button()
-                            .on_click(cx.listener(|this, _, w, cx| this.open_palette(w, cx))),
-                    )
-                    .child(
-                        parts::watch_button().on_click(cx.listener(|this, _, window, cx| {
-                            let panel = panel_handle(this.watchlist.clone()).panel_id(cx);
-                            this.dock
-                                .update(cx, |dock, cx| dock.select_panel(panel, window, cx));
-                            window.focus(&this.watchlist.focus_handle(cx), cx);
-                        })),
-                    )
-                    .child(
-                        parts::reset_button()
-                            .on_click(cx.listener(|this, _, w, cx| this.reset_layout(w, cx))),
-                    ),
+                parts::title_bar(cx).child(
+                    palette_design::search_button()
+                        .on_click(cx.listener(|this, _, w, cx| this.open_palette(w, cx))),
+                ),
             )
             .child(parts::workspace_body().child(self.dock.clone()))
             .child(status_bar::render(self.store.read(cx), cx))

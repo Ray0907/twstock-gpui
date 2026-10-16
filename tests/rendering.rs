@@ -244,7 +244,7 @@ fn render(mode: ThemeMode, width: u32, height: u32, path: &str) -> Vec<u8> {
                 window.find("watchlist-panel").bounds().size.width > before.size.width + px(10.),
                 "dock divider must resize the panel"
             );
-            window.click("reset-layout", cx);
+            window.press("cmd-shift-r", cx);
             window.scale_factor()
         })
         .unwrap();
@@ -270,7 +270,7 @@ fn render(mode: ThemeMode, width: u32, height: u32, path: &str) -> Vec<u8> {
             moved.left() > chart_left + px(20.),
             "chart tab must move to the quote group: {chart_left:?} → {moved:?}"
         );
-        window.click("reset-layout", cx);
+        window.press("cmd-shift-r", cx);
     })
     .unwrap();
     cx.run_until_parked();
@@ -1401,11 +1401,14 @@ fn position_layout_cases() {
 mod snapshot;
 #[path = "support/states.rs"]
 mod states;
+#[path = "support/titlebar.rs"]
+mod titlebar;
 #[path = "support/volume.rs"]
 mod volume;
 #[path = "support/zoom.rs"]
 mod zoom;
 fn main() {
+    titlebar::run();
     zoom::run();
     states::run();
     position_layout_cases();
