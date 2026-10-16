@@ -142,6 +142,32 @@ pub fn run() {
                         .unwrap();
                 }
             }
+            cx.update(|cx| {
+                host.update(cx, |h, cx| {
+                    h.small = false;
+                    h.store.histories.clear();
+                    cx.notify();
+                })
+            });
+            sender
+                .send(Err("temporary history failure".into()))
+                .unwrap();
+            for _ in 0..2 {
+                cx.update_window(handle, |_, w, cx| w.render_frame(cx))
+                    .unwrap();
+                cx.run_until_parked();
+            }
+            // Keep the failure reason visible while a retry has no result yet.
+            cx.update(|cx| host.update(cx, |_, cx| cx.notify()));
+            cx.update_window(handle, |_, w, cx| {
+                w.render_frame(cx);
+                assert_eq!(
+                    w.find("panel-state-text").label().unwrap(),
+                    "載入失敗：temporary history failure"
+                );
+                assert!(w.try_find("candle-region").is_none());
+            })
+            .unwrap();
             let loaded = MockProvider::new().store();
             sender
                 .send(Ok(loaded.histories[&loaded.order[0]].clone()))

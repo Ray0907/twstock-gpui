@@ -1169,6 +1169,15 @@ fn palette_workflow() {
                 .unwrap();
             cx.run_until_parked();
         }
+        cx.update_window(handle, |_, w, _| {
+            let row = if mock { 0_usize } else { 1_usize };
+            assert_eq!(
+                w.find(("row", row)).selected(),
+                Some(true),
+                "palette additions must become the selected-first history job"
+            );
+        })
+        .unwrap();
         if mock {
             cx.update_window(handle, |_, w, _| {
                 assert!(w.find("palette-message").label().unwrap().contains("切換"))

@@ -2,6 +2,8 @@ mod config;
 mod directory;
 pub use directory::*;
 mod history;
+mod history_queue;
+pub use history_queue::*;
 mod mis;
 mod mock;
 mod model;

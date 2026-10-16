@@ -40,6 +40,8 @@ Screenshots use invented sample data (fictional instruments with codes starting 
 | Daily history | TWSE `STOCK_DAY` | One month per request, back-filled to 100 bars, at most 12 months back. Listed (TSE) only; OTC history is not wired up yet. |
 | Instrument list | TWSE ISIN lists, listed `strMode=2`, OTC `strMode=4` | Only the official "stock" and "ETF" categories. The category decides the ETF tick size; the code prefix is never guessed. |
 
+Daily history is cached under `~/.cache/twstock-gpui/history/` (one file per instrument): a past month is final, and never refetched, only if it was fetched after that month ended; the current month and anything captured mid-month is always refetched. Error responses are never cached, and a corrupt cache falls back to the network. The selected instrument loads first and the rest queue in the background, with at least 2 s between requests; a failed load is retried with a backoff from 60 s up to 10 min, and selecting the instrument retries it immediately.
+
 Personal use only. Not investment advice, and the data is not guaranteed to be correct or real-time. Please do not raise the polling rate.
 
 Without a config file the app uses fixed-seed sample data, so you can try it on any machine.

@@ -141,7 +141,8 @@ fn live_smoke_opt_in_only() {
         }
         eprintln!("live market status: {}", store.status_text(now));
     }
-    let mut history = HistoryProvider::new().unwrap();
+    let history_cache = tempfile::tempdir().unwrap();
+    let mut history = HistoryProvider::new_with_cache(history_cache.path().to_owned()).unwrap();
     for symbol in symbols {
         match history.recent(&symbol, 100, now) {
             Ok(rows) => {
@@ -194,6 +195,8 @@ fn r3_type_failure_enters_backoff_and_r10_success_emits_poll_clock() {
 
 #[test]
 fn r8_history_provider_recovers_after_an_overflow_response() {
+    #[path = "support/history_clock.rs"]
+    mod history_clock;
     struct Responses(std::collections::VecDeque<String>);
     impl HttpTransport for Responses {
         fn get(&mut self, _: &str) -> Result<String, String> {
@@ -201,9 +204,12 @@ fn r8_history_provider_recovers_after_an_overflow_response() {
         }
     }
     let body = include_str!("fixtures/history.json");
-    let mut provider = HistoryProvider::with_transport(Responses(
-        [body.replace("115/01/02", "2147483647/01/02"), body.into()].into(),
-    ));
+    let cache = tempfile::tempdir().unwrap();
+    let mut provider = HistoryProvider::with_clock(
+        Responses([body.replace("115/01/02", "2147483647/01/02"), body.into()].into()),
+        cache.path().to_owned(),
+        history_clock::FakeClock::default(),
+    );
     let symbol = Symbol::new(Market::Listed, "889901").unwrap();
     let range = DateRange {
         start: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),

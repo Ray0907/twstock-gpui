@@ -72,10 +72,12 @@ fn load() -> MarketStore {
             let _ = quotes.send(Loaded::Error(error));
         }
     });
+    let history_cache = tempfile::tempdir().unwrap();
     for symbol in symbols {
+        let cache = history_cache.path().to_owned();
         let history = tx.clone();
         thread::spawn(move || {
-            let rows = HistoryProvider::new()
+            let rows = HistoryProvider::new_with_cache(cache)
                 .and_then(|mut provider| provider.recent(&symbol, 100, now()));
             let _ = history.send(Loaded::History(symbol, rows));
         });

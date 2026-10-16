@@ -2,7 +2,7 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct Price(pub i64);
 impl FromStr for Price {
     type Err = String;
@@ -174,7 +174,7 @@ pub struct DateRange {
     pub start: NaiveDate,
     pub end: NaiveDate,
 }
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct Candle {
     pub time: NaiveDate,
     pub open: Price,

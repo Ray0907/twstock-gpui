@@ -199,6 +199,8 @@ fn zero_subscription_capacity_and_invalid_configuration_are_safe() {
 }
 #[test]
 fn history_backfills_an_empty_current_month() {
+    #[path = "support/history_clock.rs"]
+    mod history_clock;
     use std::collections::VecDeque;
     struct Http(VecDeque<String>);
     impl HttpTransport for Http {
@@ -207,10 +209,15 @@ fn history_backfills_an_empty_current_month() {
         }
     }
     let history = include_str!("fixtures/history.json").replace("115/01/02", "114/12/02");
-    let mut provider = HistoryProvider::with_transport(Http(VecDeque::from([
-        r#"{"stat":"很抱歉，沒有符合條件的資料!","data":[]}"#.into(),
-        history,
-    ])));
+    let cache = tempfile::tempdir().unwrap();
+    let mut provider = HistoryProvider::with_clock(
+        Http(VecDeque::from([
+            r#"{"stat":"很抱歉，沒有符合條件的資料!","data":[]}"#.into(),
+            history,
+        ])),
+        cache.path().to_owned(),
+        history_clock::FakeClock::default(),
+    );
     let rows = provider.recent(&symbol(), 1, 1_768_457_700).unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].time.to_string(), "2025-12-02");

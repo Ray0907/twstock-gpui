@@ -14,10 +14,92 @@ use gpui_kit::{
     component::{
         WindowExt,
         dock::{DockArea, DockSkin, panel_handle},
+        table::TableEvent,
     },
     *,
 };
-use std::{path::PathBuf, rc::Rc};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    rc::Rc,
+    sync::{Arc, Condvar, Mutex},
+};
+#[derive(Default)]
+struct HistoryWork {
+    queue: HistoryQueue,
+    stopped: bool,
+}
+type SharedHistoryWork = Arc<(Mutex<HistoryWork>, Condvar)>;
+
+#[cfg(test)]
+#[path = "../tests/support/history_worker.rs"]
+mod history_tests;
+fn run_history_worker<T: HttpTransport, C: HistoryClock>(
+    work: SharedHistoryWork,
+    tx: futures::channel::mpsc::UnboundedSender<(Symbol, Result<Vec<Candle>, String>)>,
+    mut provider_factory: impl FnMut() -> Result<HistoryProvider<T, C>, String>,
+) {
+    let mut provider = None;
+    let mut loads = HashMap::new();
+    loop {
+        let symbol = {
+            let (lock, wake) = &*work;
+            let mut state = lock.lock().unwrap();
+            while !state.stopped && state.queue.next().is_none() {
+                state = wake.wait(state).unwrap();
+            }
+            if state.stopped {
+                break;
+            }
+            state.queue.next().unwrap()
+        };
+        let result = match provider.get_or_insert_with(&mut provider_factory) {
+            Ok(provider) => {
+                let load = loads
+                    .entry(symbol.clone())
+                    .or_insert_with(|| HistoryLoad::new(symbol.clone(), 100, now()));
+                match load {
+                    Ok(load) => {
+                        let delay = load.ready_in(provider);
+                        if !delay.is_zero() {
+                            let (lock, wake) = &*work;
+                            let state = lock.lock().unwrap();
+                            if !state.stopped && state.queue.next().as_ref() == Some(&symbol) {
+                                drop(wake.wait_timeout(state, delay).unwrap());
+                            }
+                            continue;
+                        }
+                        load.advance(provider)
+                    }
+                    Err(error) => Err(error.clone()),
+                }
+            }
+            Err(error) => Err(error.clone()),
+        };
+        match result {
+            Ok(None) => {}
+            result => {
+                let rows = result.map(|rows| rows.unwrap());
+                {
+                    let mut state = work.0.lock().unwrap();
+                    if rows.is_ok() {
+                        state.queue.finish(&symbol);
+                    } else {
+                        state.queue.fail(&symbol, std::time::Instant::now());
+                    }
+                }
+                if provider.as_ref().is_some_and(|p| p.is_err()) {
+                    provider = None;
+                }
+                loads.remove(&symbol);
+                if tx.unbounded_send((symbol, rows)).is_err() {
+                    break;
+                }
+            }
+        }
+    }
+}
+
 gpui_kit::actions!(workspace, [OpenPalette, ResetLayout]);
 pub struct Workspace {
     dock: Entity<DockArea>,
@@ -29,6 +111,8 @@ pub struct Workspace {
     focus: FocusHandle,
     _market: Subscription,
     _remove: Subscription,
+    _selection: Subscription,
+    history_work: SharedHistoryWork,
     _feed: Option<Task<()>>,
     _history: Option<Task<()>>,
     _freshness: Option<Task<()>>,
@@ -107,6 +191,15 @@ impl Workspace {
         let watchlist = cx.new(|cx| WatchlistPanel::new(store.clone(), window, cx));
         let table = watchlist.read(cx).table.clone();
         let chart = cx.new(|cx| ChartPanel::new(table.clone(), window, cx));
+        let selection = cx.subscribe(&table, |this, _, event: &TableEvent, cx| {
+            if let TableEvent::SelectRow(row) = event
+                && let Some(symbol) = this.store.read(cx).order.get(*row)
+            {
+                let (lock, wake) = &*this.history_work;
+                lock.lock().unwrap().queue.select(symbol);
+                wake.notify_one();
+            }
+        });
         let quote = cx.new(|cx| QuotePanel::new(table, window, cx));
         let (dock, skin) = parts::dock(window, cx);
         let remove = cx.subscribe_in(
@@ -128,6 +221,8 @@ impl Workspace {
             focus: cx.focus_handle(),
             _market: market,
             _remove: remove,
+            _selection: selection,
+            history_work: Arc::default(),
             _feed: None,
             _history: None,
             _freshness: None,
@@ -278,6 +373,7 @@ impl Workspace {
             return Err(format!("已達來源訂閱上限（{max} 檔），請先移除商品"));
         }
         let path = self.path.clone().ok_or("尚未設定自選檔案路徑")?;
+        let selected = item.symbol.clone();
         let entries = save_watchlist(&path, WatchlistChange::Add(item), max)?;
         if self.is_mock(cx) {
             self.store.update(cx, |store, _| {
@@ -285,8 +381,13 @@ impl Workspace {
             });
         }
         self.mock = false;
-        self.apply_watchlist(entries, cx);
+        self.apply_watchlist(entries, Some(&selected), cx);
         Ok(())
+    }
+    fn selected_symbol(&self, cx: &App) -> Option<Symbol> {
+        let table = &self.watchlist.read(cx).table;
+        let row = table.read(cx).selected_row().unwrap_or(0);
+        self.store.read(cx).order.get(row).cloned()
     }
     fn remove_selected(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
         let table = self.watchlist.read(cx).table.clone();
@@ -310,7 +411,7 @@ impl Workspace {
                 WatchlistChange::Remove(symbol),
                 Capabilities::mis().max_subscriptions,
             )?;
-            self.apply_watchlist(entries, cx);
+            self.apply_watchlist(entries, None, cx);
         }
         let count = self.store.read(cx).order.len();
         table.update(cx, |table, cx| {
@@ -323,7 +424,12 @@ impl Workspace {
         });
         Ok(())
     }
-    fn apply_watchlist(&mut self, items: Vec<Instrument>, cx: &mut Context<Self>) {
+    fn apply_watchlist(
+        &mut self,
+        items: Vec<Instrument>,
+        selected: Option<&Symbol>,
+        cx: &mut Context<Self>,
+    ) {
         let directory = self.directory.as_ref().and_then(|r| r.as_ref().ok());
         self.store.update(cx, |store, cx| {
             for symbol in store.order.clone() {
@@ -341,7 +447,11 @@ impl Workspace {
             cx.notify();
         });
         let table = self.watchlist.read(cx).table.clone();
-        if table
+        let selected =
+            selected.and_then(|symbol| self.store.read(cx).order.iter().position(|s| s == symbol));
+        if let Some(row) = selected {
+            table.update(cx, |t, cx| t.set_selected_row(row, cx));
+        } else if table
             .read(cx)
             .selected_row()
             .is_none_or(|row| row >= self.store.read(cx).order.len())
@@ -413,27 +523,22 @@ impl Workspace {
             });
         }
         let missing = symbols
-            .into_iter()
-            .filter(|s| !self.store.read(cx).histories.contains_key(s))
+            .iter()
+            .filter(|s| !self.store.read(cx).histories.contains_key(*s))
+            .cloned()
             .collect::<Vec<_>>();
-        if !missing.is_empty() {
+        let selected = self.selected_symbol(cx);
+        {
+            let (lock, wake) = &*self.history_work;
+            let mut work = lock.lock().unwrap();
+            work.queue.retain(&symbols);
+            work.queue.enqueue(&missing, selected.as_ref());
+            wake.notify_one();
+        }
+        if self._history.is_none() {
             let (tx, mut rx) = futures::channel::mpsc::unbounded();
-            std::thread::spawn(move || {
-                let mut provider = HistoryProvider::new();
-                for symbol in missing {
-                    if tx.is_closed() {
-                        break;
-                    }
-                    let result = match &mut provider {
-                        Ok(p) => p.recent(&symbol, 100, now()),
-                        Err(e) => Err(e.clone()),
-                    };
-                    if tx.unbounded_send((symbol, result)).is_err() {
-                        break;
-                    }
-                    std::thread::sleep(std::time::Duration::from_secs(2));
-                }
-            });
+            let work = self.history_work.clone();
+            std::thread::spawn(move || run_history_worker(work, tx, HistoryProvider::new));
             self._history = Some(cx.spawn(async move |this, cx| {
                 while let Some((symbol, rows)) = rx.next().await {
                     if this
@@ -486,6 +591,13 @@ impl Workspace {
         );
         self.dock
             .update(cx, |dock, cx| dock.set_center(layout, window, cx));
+    }
+}
+impl Drop for Workspace {
+    fn drop(&mut self) {
+        let (lock, wake) = &*self.history_work;
+        lock.lock().unwrap().stopped = true;
+        wake.notify_one();
     }
 }
 impl Render for Workspace {

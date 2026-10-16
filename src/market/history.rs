@@ -1,7 +1,14 @@
 use super::*;
 use chrono::{Datelike, NaiveDate};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{thread, time::Duration};
+use std::{
+    collections::{BTreeMap, HashSet},
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, OnceLock},
+    thread,
+    time::{Duration, Instant},
+};
 pub fn parse_history(body: &str) -> Result<Vec<Candle>, String> {
     let value: Value = serde_json::from_str(body).map_err(|_| "invalid history JSON")?;
     if value["stat"].as_str() != Some("OK") {
@@ -74,19 +81,226 @@ fn monthly_rows(body: &str) -> Result<Vec<Candle>, String> {
     }
     parse_history(body)
 }
-pub struct HistoryProvider<T: HttpTransport = CurlSession> {
+
+const REQUEST_SPACING: Duration = Duration::from_secs(2);
+
+pub trait HistoryClock: Send {
+    fn elapsed(&self) -> Duration;
+    fn sleep(&mut self, duration: Duration);
+}
+pub struct RealHistoryClock(Instant);
+impl HistoryClock for RealHistoryClock {
+    fn elapsed(&self) -> Duration {
+        self.0.elapsed()
+    }
+    fn sleep(&mut self, duration: Duration) {
+        thread::sleep(duration);
+    }
+}
+struct Throttle<C> {
+    clock: C,
+    last: Option<Duration>,
+}
+impl<C: HistoryClock> Throttle<C> {
+    fn remaining(&self) -> Duration {
+        self.last.map_or(Duration::ZERO, |last| {
+            REQUEST_SPACING.saturating_sub(self.clock.elapsed().saturating_sub(last))
+        })
+    }
+    fn wait(&mut self) {
+        let delay = self.remaining();
+        if !delay.is_zero() {
+            self.clock.sleep(delay);
+        }
+        self.last = Some(self.clock.elapsed());
+    }
+}
+type SharedThrottle<C> = Arc<Mutex<Throttle<C>>>;
+
+#[derive(Serialize, Deserialize)]
+struct CachedMonth {
+    fetched_on: NaiveDate,
+    rows: Vec<Candle>,
+}
+#[derive(Serialize, Deserialize)]
+struct Cache {
+    version: u8,
+    months: BTreeMap<String, CachedMonth>,
+}
+impl Cache {
+    fn final_rows(&self, month: NaiveDate, today: NaiveDate) -> Option<&[Candle]> {
+        self.months
+            .get(&month.format("%Y-%m").to_string())
+            .filter(|cached| {
+                month < today.with_day(1).unwrap() && cached.fetched_on.with_day(1).unwrap() > month
+            })
+            .map(|cached| cached.rows.as_slice())
+    }
+}
+impl Default for Cache {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            months: BTreeMap::new(),
+        }
+    }
+}
+fn valid_rows(rows: &[Candle], month: NaiveDate) -> bool {
+    rows.windows(2).all(|p| p[0].time < p[1].time)
+        && rows.iter().all(|c| {
+            c.time.with_day(1) == Some(month)
+                && c.low.0 >= 0
+                && c.low <= c.high
+                && (c.low..=c.high).contains(&c.open)
+                && (c.low..=c.high).contains(&c.close)
+        })
+}
+fn previous_month(month: NaiveDate) -> Result<NaiveDate, String> {
+    month
+        .pred_opt()
+        .and_then(|d| d.with_day(1))
+        .ok_or("history date underflow".into())
+}
+pub fn history_cache_dir() -> Result<PathBuf, String> {
+    let root = match std::env::var_os("TWSTOCK_GPUI_CACHE_DIR") {
+        Some(path) => PathBuf::from(path),
+        None => PathBuf::from(std::env::var_os("HOME").ok_or("HOME is unavailable")?)
+            .join(".cache/twstock-gpui"),
+    };
+    Ok(root.join("history"))
+}
+pub struct HistoryProvider<T: HttpTransport = CurlSession, C: HistoryClock = RealHistoryClock> {
     transport: T,
+    cache: PathBuf,
+    throttle: SharedThrottle<C>,
+    warned: HashSet<PathBuf>,
+    requests: usize,
 }
 impl HistoryProvider<CurlSession> {
     pub fn new() -> Result<Self, String> {
-        Ok(Self::with_transport(CurlSession::new(
-            "https://www.twse.com.tw/",
-        )?))
+        Self::new_with_cache(history_cache_dir()?)
+    }
+    pub fn new_with_cache(cache: PathBuf) -> Result<Self, String> {
+        Ok(Self::with_cache(
+            CurlSession::new("https://www.twse.com.tw/")?,
+            cache,
+        ))
     }
 }
 impl<T: HttpTransport> HistoryProvider<T> {
-    pub fn with_transport(transport: T) -> Self {
-        Self { transport }
+    pub fn with_cache(transport: T, cache: PathBuf) -> Self {
+        // All live providers share request spacing, including across instruments/windows.
+        static THROTTLE: OnceLock<SharedThrottle<RealHistoryClock>> = OnceLock::new();
+        Self {
+            transport,
+            cache,
+            throttle: THROTTLE
+                .get_or_init(|| {
+                    Arc::new(Mutex::new(Throttle {
+                        clock: RealHistoryClock(Instant::now()),
+                        last: None,
+                    }))
+                })
+                .clone(),
+            warned: HashSet::new(),
+            requests: 0,
+        }
+    }
+}
+impl<T: HttpTransport, C: HistoryClock> HistoryProvider<T, C> {
+    pub fn with_clock(transport: T, cache: PathBuf, clock: C) -> Self {
+        Self {
+            transport,
+            cache,
+            throttle: Arc::new(Mutex::new(Throttle { clock, last: None })),
+            warned: HashSet::new(),
+            requests: 0,
+        }
+    }
+    pub fn request_count(&self) -> usize {
+        self.requests
+    }
+    fn warn(&mut self, path: &Path, error: impl std::fmt::Display) {
+        if self.warned.insert(path.to_owned()) {
+            eprintln!("history cache {}: {error}; using network", path.display());
+        }
+    }
+    fn read_cache(&mut self, path: &Path, today: NaiveDate) -> Cache {
+        let result = (|| -> Result<Cache, String> {
+            let bytes = match std::fs::read(path) {
+                Ok(bytes) => bytes,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Cache::default()),
+                Err(e) => return Err(e.to_string()),
+            };
+            let cache: Cache = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+            if cache.version != 1
+                || !cache.months.iter().all(|(key, value)| {
+                    NaiveDate::parse_from_str(&format!("{key}-01"), "%Y-%m-%d").is_ok_and(|month| {
+                        month.format("%Y-%m").to_string() == *key
+                            && value.fetched_on <= today
+                            && valid_rows(&value.rows, month)
+                    })
+                })
+            {
+                return Err("invalid version or month data".into());
+            }
+            Ok(cache)
+        })();
+        match result {
+            Ok(cache) => cache,
+            Err(e) => {
+                self.warn(path, e);
+                Cache::default()
+            }
+        }
+    }
+    fn month(
+        &mut self,
+        symbol: &Symbol,
+        month: NaiveDate,
+        today: NaiveDate,
+    ) -> Result<Vec<Candle>, String> {
+        Symbol::new(symbol.market, &symbol.code)?;
+        let path = self
+            .cache
+            .join(format!("{}-{}.json", symbol.market.exchange(), symbol.code));
+        let mut cache = self.read_cache(&path, today);
+        let key = month.format("%Y-%m").to_string();
+        if let Some(rows) = cache.final_rows(month, today) {
+            return Ok(rows.to_vec());
+        }
+        let url = format!(
+            "https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY?date={}&stockNo={}&response=json",
+            month.format("%Y%m%d"),
+            symbol.code
+        );
+        let body = {
+            let mut throttle = self.throttle.lock().unwrap();
+            throttle.wait();
+            self.requests += 1;
+            // Keep the guard through the request so providers cannot overtake one another.
+            self.transport.get(&url)?
+        };
+        let mut rows = monthly_rows(&body)?;
+        rows.sort_by_key(|c| c.time);
+        rows.dedup_by_key(|c| c.time);
+        if !valid_rows(&rows, month) {
+            return Err("invalid history month rows".into());
+        }
+        cache.months.insert(
+            key,
+            CachedMonth {
+                fetched_on: today,
+                rows: rows.clone(),
+            },
+        );
+        let written = serde_json::to_vec(&cache)
+            .map_err(|e| e.to_string())
+            .and_then(|bytes| atomic_write(&path, &bytes));
+        if let Err(e) = written {
+            self.warn(&path, e);
+        }
+        Ok(rows)
     }
     pub fn recent(
         &mut self,
@@ -94,35 +308,93 @@ impl<T: HttpTransport> HistoryProvider<T> {
         count: usize,
         now: i64,
     ) -> Result<Vec<Candle>, String> {
+        let mut load = HistoryLoad::new(symbol.clone(), count, now)?;
+        loop {
+            if let Some(rows) = load.advance(self)? {
+                return Ok(rows);
+            }
+        }
+    }
+}
+/// One month per step lets the workspace reconsider selection after every request.
+pub struct HistoryLoad {
+    symbol: Symbol,
+    count: usize,
+    end: NaiveDate,
+    month: NaiveDate,
+    months: usize,
+    rows: Vec<Candle>,
+}
+impl HistoryLoad {
+    pub fn new(symbol: Symbol, count: usize, now: i64) -> Result<Self, String> {
+        Symbol::new(symbol.market, &symbol.code)?;
         if symbol.market != Market::Listed {
             return Err("上櫃歷史尚未接入".into());
         }
         let end = local_time(now).date_naive();
-        let mut month = NaiveDate::from_ymd_opt(end.year(), end.month(), 1).unwrap();
-        let mut rows = Vec::new();
-        if count == 0 {
-            return Ok(rows);
+        Ok(Self {
+            symbol,
+            count,
+            end,
+            month: end.with_day(1).unwrap(),
+            months: 0,
+            rows: Vec::new(),
+        })
+    }
+    /// Allows an interruptible workspace wait before choosing the next network request.
+    pub fn ready_in<T: HttpTransport, C: HistoryClock>(
+        &self,
+        provider: &mut HistoryProvider<T, C>,
+    ) -> Duration {
+        if self.count == 0 {
+            return Duration::ZERO;
         }
-        for _ in 0..12 {
-            let body=self.transport.get(&format!("https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY?date={}&stockNo={}&response=json",month.format("%Y%m%d"),symbol.code))?;
-            let data = monthly_rows(&body)?;
-            rows.extend(data.into_iter().filter(|c| c.time <= end));
-            rows.sort_by_key(|c| c.time);
-            rows.dedup_by_key(|c| c.time);
-            if rows.len() >= count {
-                return Ok(rows.split_off(rows.len() - count));
-            }
-            month = month
-                .pred_opt()
-                .ok_or("history date underflow")?
-                .with_day(1)
-                .unwrap();
-            thread::sleep(Duration::from_secs(2));
+        let path = provider.cache.join(format!(
+            "{}-{}.json",
+            self.symbol.market.exchange(),
+            self.symbol.code
+        ));
+        if provider
+            .read_cache(&path, self.end)
+            .final_rows(self.month, self.end)
+            .is_some()
+        {
+            Duration::ZERO
+        } else {
+            provider.throttle.lock().unwrap().remaining()
         }
-        Err(format!("只有 {} 根歷史，未滿 {count}", rows.len()))
+    }
+    pub fn advance<T: HttpTransport, C: HistoryClock>(
+        &mut self,
+        provider: &mut HistoryProvider<T, C>,
+    ) -> Result<Option<Vec<Candle>>, String> {
+        if self.count == 0 {
+            return Ok(Some(Vec::new()));
+        }
+        self.rows.extend(
+            provider
+                .month(&self.symbol, self.month, self.end)?
+                .into_iter()
+                .filter(|c| c.time <= self.end),
+        );
+        self.rows.sort_by_key(|c| c.time);
+        self.rows.dedup_by_key(|c| c.time);
+        if self.rows.len() >= self.count {
+            return Ok(Some(self.rows.split_off(self.rows.len() - self.count)));
+        }
+        self.months += 1;
+        if self.months >= 12 {
+            return Err(format!(
+                "只有 {} 根歷史，未滿 {}",
+                self.rows.len(),
+                self.count
+            ));
+        }
+        self.month = previous_month(self.month)?;
+        Ok(None)
     }
 }
-impl<T: HttpTransport> History for HistoryProvider<T> {
+impl<T: HttpTransport, C: HistoryClock> History for HistoryProvider<T, C> {
     fn candles(
         &mut self,
         symbol: &Symbol,
@@ -132,23 +404,23 @@ impl<T: HttpTransport> History for HistoryProvider<T> {
         if timeframe != Timeframe::Day || symbol.market != Market::Listed {
             return Err("unsupported history".into());
         }
+        if range.start > range.end {
+            return Err("invalid range".into());
+        }
+        let today = local_time(now()).date_naive();
         let mut month = range.end.with_day(1).ok_or("invalid range")?;
+        let start = range.start.with_day(1).ok_or("invalid range")?;
         let mut rows = Vec::new();
-        while month <= range.end && month.with_day(1).unwrap() >= range.start.with_day(1).unwrap() {
-            let body=self.transport.get(&format!("https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY?date={}&stockNo={}&response=json",month.format("%Y%m%d"),symbol.code))?;
+        loop {
             rows.extend(
-                monthly_rows(&body)?
+                self.month(symbol, month, today)?
                     .into_iter()
                     .filter(|c| c.time >= range.start && c.time <= range.end),
             );
-            month = month
-                .pred_opt()
-                .ok_or("history date underflow")?
-                .with_day(1)
-                .unwrap();
-            if month >= range.start.with_day(1).unwrap() {
-                thread::sleep(Duration::from_secs(2));
+            if month == start {
+                break;
             }
+            month = previous_month(month)?;
         }
         rows.sort_by_key(|c| c.time);
         rows.dedup_by_key(|c| c.time);
