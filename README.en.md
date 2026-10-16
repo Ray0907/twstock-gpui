@@ -83,7 +83,7 @@ Run it in a desktop session with a display; a window cannot be opened over SSH. 
 
 ### Watchlist
 
-Create `~/.config/twstock-gpui/watchlist.toml`; only when it is absent does the app read the legacy `~/.config/twstock-gpui/watchlist.toml` in place, with additions/removals written back to the loaded file without copying or moving it:
+Create `~/.config/twstock-gpui/watchlist.toml`; additions/removals in the app are written back to it:
 
 ```toml
 [[watchlist]]

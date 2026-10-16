@@ -46,23 +46,7 @@ pub fn parse_watchlist(text: &str) -> Result<Vec<Instrument>, String> {
 
 pub fn watchlist_path() -> Result<std::path::PathBuf, String> {
     let home = std::path::PathBuf::from(std::env::var_os("HOME").ok_or("HOME is unavailable")?);
-    let current = home.join(".config/twstock-gpui/watchlist.toml");
-    if current
-        .try_exists()
-        .map_err(|e| format!("自選設定讀取失敗：{e}"))?
-    {
-        return Ok(current);
-    }
-    // Read legacy config in place only when the new file is absent; never migrate it.
-    let legacy = home.join(".config/twstock-gpui/watchlist.toml");
-    if legacy
-        .try_exists()
-        .map_err(|e| format!("自選設定讀取失敗：{e}"))?
-    {
-        Ok(legacy)
-    } else {
-        Ok(current)
-    }
+    Ok(home.join(".config/twstock-gpui/watchlist.toml"))
 }
 fn matches_symbol(market: Option<&str>, code: Option<&str>, symbol: &Symbol) -> bool {
     code == Some(symbol.code.as_str())

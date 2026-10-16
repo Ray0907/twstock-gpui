@@ -26,28 +26,23 @@ fn write(path: &Path, code: &str) {
     .unwrap();
 }
 #[test]
-fn new_path_is_preferred_when_both_exist() {
-    run_case("both");
+fn existing_file_is_loaded() {
+    run_case("present");
 }
 #[test]
-fn legacy_is_used_only_when_new_file_is_absent() {
-    run_case("legacy");
-}
-#[test]
-fn neither_file_uses_sample_data_and_new_write_path() {
+fn missing_file_uses_sample_data_and_creates_the_file_on_write() {
     run_case("neither");
 }
 #[test]
 fn write_back_targets_the_loaded_file() {
-    run_case("write-new");
-    run_case("write-legacy");
+    run_case("write");
 }
 #[test]
-fn invalid_new_file_does_not_fall_back_to_legacy() {
+fn invalid_file_is_an_error() {
     run_case("invalid");
 }
 #[test]
-fn unreadable_new_path_does_not_fall_back_to_legacy() {
+fn unreadable_path_is_an_error() {
     run_case("directory");
 }
 
@@ -66,80 +61,51 @@ fn isolated_home_case() {
         home.starts_with(std::env::temp_dir()),
         "fixtures require a temporary HOME"
     );
-    let new = home.join(".config/twstock-gpui/watchlist.toml");
-    // Intentional legacy fallback fixture, always under the subprocess's temporary HOME.
-    let legacy = home.join(".config/twstock-gpui/watchlist.toml");
-    assert!(!new.exists() && !legacy.exists());
-    if case != "neither" {
-        write(&legacy, "991002");
-    }
-    if ["both", "write-new", "invalid"].contains(&case.as_str()) {
-        write(&new, "991001");
-    }
-    if case == "invalid" {
-        fs::write(&new, "invalid toml [").unwrap();
-        assert!(load_watchlist().is_err());
-        assert_eq!(watchlist_path().unwrap(), new);
-        return;
-    }
-    if case == "directory" {
-        fs::create_dir_all(&new).unwrap();
-        assert!(load_watchlist().is_err());
-        assert_eq!(watchlist_path().unwrap(), new);
-        return;
-    }
-    let loaded = load_watchlist().unwrap();
-    let path = watchlist_path().unwrap();
-    if case == "neither" {
-        assert!(
-            loaded.is_none(),
-            "None selects the existing Workspace sample-data branch"
-        );
-        assert!(!MockProvider::new().store().order.is_empty());
-        assert_eq!(path, new);
-        let item = Instrument::new(Symbol::new(Market::Listed, "991003").unwrap());
-        save_watchlist(&path, WatchlistChange::Add(item), 5).unwrap();
-        assert!(new.exists());
-        assert!(
-            !legacy.parent().unwrap().exists(),
-            "never create the legacy directory"
-        );
-        return;
-    }
-    let use_new = ["both", "write-new"].contains(&case.as_str());
-    assert_eq!(
-        loaded.unwrap()[0].symbol.code,
-        if use_new { "991001" } else { "991002" }
-    );
-    assert_eq!(path, if use_new { new.clone() } else { legacy.clone() });
-    if case.starts_with("write-") {
-        let legacy_before = fs::read(&legacy).unwrap();
-        // Even if a new config appears later, write back to the already loaded path.
-        if !use_new {
-            write(&new, "991001");
+    let path = home.join(".config/twstock-gpui/watchlist.toml");
+    assert!(!path.exists());
+    assert_eq!(watchlist_path().unwrap(), path);
+    match case.as_str() {
+        "invalid" => {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, "invalid toml [").unwrap();
+            assert!(load_watchlist().is_err());
         }
-        let new_before = fs::read(&new).unwrap();
-        let added = Instrument::new(Symbol::new(Market::Otc, "991003").unwrap());
-        save_watchlist(&path, WatchlistChange::Add(added.clone()), 5).unwrap();
-        assert!(
-            parse_watchlist(&fs::read_to_string(&path).unwrap())
-                .unwrap()
-                .iter()
-                .any(|i| i.symbol == added.symbol)
-        );
-        save_watchlist(&path, WatchlistChange::Remove(added.symbol), 5).unwrap();
-        assert_eq!(
-            parse_watchlist(&fs::read_to_string(&path).unwrap())
-                .unwrap()
-                .len(),
-            1
-        );
-        if use_new {
-            assert_eq!(fs::read(&legacy).unwrap(), legacy_before);
-        } else {
-            assert_eq!(fs::read(&new).unwrap(), new_before);
+        "directory" => {
+            fs::create_dir_all(&path).unwrap();
+            assert!(load_watchlist().is_err());
         }
-    } else if !use_new {
-        assert!(!new.exists(), "do not copy or migrate the legacy file");
+        "neither" => {
+            assert!(
+                load_watchlist().unwrap().is_none(),
+                "None selects the existing Workspace sample-data branch"
+            );
+            assert!(!MockProvider::new().store().order.is_empty());
+            let item = Instrument::new(Symbol::new(Market::Listed, "991003").unwrap());
+            save_watchlist(&path, WatchlistChange::Add(item), 5).unwrap();
+            assert!(path.exists());
+        }
+        "present" => {
+            write(&path, "991001");
+            assert_eq!(load_watchlist().unwrap().unwrap()[0].symbol.code, "991001");
+        }
+        "write" => {
+            write(&path, "991001");
+            let added = Instrument::new(Symbol::new(Market::Otc, "991003").unwrap());
+            save_watchlist(&path, WatchlistChange::Add(added.clone()), 5).unwrap();
+            assert!(
+                parse_watchlist(&fs::read_to_string(&path).unwrap())
+                    .unwrap()
+                    .iter()
+                    .any(|i| i.symbol == added.symbol)
+            );
+            save_watchlist(&path, WatchlistChange::Remove(added.symbol), 5).unwrap();
+            assert_eq!(
+                parse_watchlist(&fs::read_to_string(&path).unwrap())
+                    .unwrap()
+                    .len(),
+                1
+            );
+        }
+        other => panic!("unknown case {other}"),
     }
 }

@@ -84,7 +84,7 @@ cargo run --release
 
 ### 自選清單
 
-建立 `~/.config/twstock-gpui/watchlist.toml`；只有新檔不存在時才原地讀取舊的 `~/.config/twstock-gpui/watchlist.toml`，加入／移除商品會寫回實際載入的檔案，不複製或搬移舊檔：
+建立 `~/.config/twstock-gpui/watchlist.toml`；在 app 內加入／移除商品會寫回這個檔案：
 
 ```toml
 [[watchlist]]
